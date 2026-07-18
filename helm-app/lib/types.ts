@@ -21,3 +21,31 @@ export interface PermissionRow { capability: string; roles: Record<Role, 'yes' |
 export interface IntegrationRow { name: string; auth: string; status: 'healthy' | 'degraded' | 'paused'; lastSync: string; calls: string; errors: number }
 export interface ActivityEvent { agent: string; title: string; sub: string; dot: SeriesColor; latency: string; tokens: string; tag?: 'ERR' | 'REVIEW' }
 export interface Flag { title: string; desc: string; on: boolean }
+
+export interface CampaignFull {
+  id: string; name: string; channel: string; channelColor: SeriesColor
+  status: 'active' | 'review' | 'paused'
+  spend: number; budget: number; pacingPct: number
+  results: number; cac: number | null; roas: number
+  objective: string; startedAt: string
+}
+export interface AdGroup { id: string; name: string; status: 'active' | 'paused'; spend: number; results: number }
+export interface CreativeAsset { id: string; kind: 'image' | 'video' | 'copy'; label: string; status: 'live' | 'review' | 'draft'; grad: [SeriesColor, SeriesColor] }
+export interface CampaignDetail { campaign: CampaignFull; adGroups: AdGroup[]; creatives: CreativeAsset[]; series: number[] }
+
+export type VariantKind = 'image' | 'copy'
+export interface Brief { audience: string; hook: string; offer: string; format: 'image' | 'video' | 'copy' }
+export interface Variant { id: string; kind: VariantKind; headline: string; body?: string; grad: [SeriesColor, SeriesColor]; compliance: 'pass' | 'flag'; flagReason?: string }
+
+export interface PromptTemplate { id: string; title: string; body: string }
+export interface Citation { label: string; source: string }
+export interface ChatMessage { id: string; role: 'user' | 'assistant'; text: string; citations?: Citation[] }
+
+export interface PolicyCheck { label: string; status: 'pass' | 'warn' }
+export interface ApprovalItem { id: string; agent: string; agentCode: string; action: string; summary: string; payload: string; proposedAt: string; checks: PolicyCheck[] }
+
+export interface IntegrationDetail {
+  id: string; name: string; auth: 'OAuth 2.1' | 'API key' | 'token'
+  status: 'healthy' | 'degraded' | 'paused' | 'disconnected'
+  scopes: string[]; lastSync: string; calls: string; grad: [SeriesColor, SeriesColor]
+}

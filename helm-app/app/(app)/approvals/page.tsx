@@ -1,16 +1,7 @@
-import { Card } from '@/components/ui/Card'
-import { EmptyState } from '@/components/ui/EmptyState'
-import { CheckCircle } from 'lucide-react'
+import { getApprovals } from '@/lib/data'
+import { ApprovalsView } from './ApprovalsView'
 
-export default function ApprovalsPage() {
-  return (
-    <div className="content">
-      <div className="phead"><div><h1>Approvals Inbox</h1><p>Human-in-the-loop — agents propose, you dispose</p></div></div>
-      <Card>
-        <EmptyState icon={<CheckCircle />} title="Approvals Inbox">
-          Every action above a tenant's autonomy threshold lands here: budget shifts, creative ships, suppression lists — approve, edit, or reject, then the agent resumes from checkpoint.
-        </EmptyState>
-      </Card>
-    </div>
-  )
+export default async function ApprovalsPage() {
+  const items = await getApprovals()
+  return <ApprovalsView items={items} />
 }

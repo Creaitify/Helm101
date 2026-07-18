@@ -15,6 +15,14 @@ import type {
   IntegrationRow,
   ActivityEvent,
   Flag,
+  CampaignFull,
+  AdGroup,
+  CreativeAsset,
+  CampaignDetail,
+  Brief,
+  PromptTemplate,
+  ApprovalItem,
+  IntegrationDetail,
 } from '../../types'
 
 // Values ported verbatim (where directly shown) or reconciled (where derived) from helm-mockup-v4.html.
@@ -218,4 +226,53 @@ export const featureFlags: Flag[] = [
   { title: 'Embedded workspace', desc: 'internal LLM workspace for the team', on: true },
   { title: 'Client read-only view', desc: 'expose locked dashboard to Finnovate', on: true },
   { title: 'Vector retrieval (RAG)', desc: 'ground workspace on tenant data', on: true },
+]
+
+export const campaignsFull: CampaignFull[] = [
+  { id: 'c1', name: 'FHC · Retargeting', channel: 'Meta', channelColor: 'violet', status: 'active', spend: 156000, budget: 230000, pacingPct: 68, results: 458, cac: 341, roas: 3.2, objective: 'Lowest CAC / checkup', startedAt: '2026-06-18' },
+  { id: 'c2', name: 'FHC · Lookalike 2%', channel: 'Meta', channelColor: 'violet', status: 'active', spend: 92000, budget: 100000, pacingPct: 92, results: 202, cac: 455, roas: 2.5, objective: 'Scale prospecting', startedAt: '2026-06-25' },
+  { id: 'c3', name: 'Search · Brand', channel: 'Google', channelColor: 'amber', status: 'active', spend: 54000, budget: 100000, pacingPct: 54, results: 181, cac: 298, roas: 3.4, objective: 'Capture intent', startedAt: '2026-05-30' },
+  { id: 'c4', name: 'Reels · Awareness', channel: 'Meta', channelColor: 'violet', status: 'review', cac: null, spend: 0, budget: 80000, pacingPct: 0, results: 0, roas: 0, objective: 'Top-of-funnel reach', startedAt: '2026-07-15' },
+  { id: 'c5', name: 'FHC · Prospecting', channel: 'Google', channelColor: 'amber', status: 'active', spend: 83000, budget: 80000, pacingPct: 104, results: 136, cac: 612, roas: 1.9, objective: 'Volume', startedAt: '2026-06-10' },
+  { id: 'c6', name: 'Email · Nurture', channel: 'Email', channelColor: 'sky', status: 'paused', spend: 7000, budget: 35000, pacingPct: 20, results: 63, cac: 556, roas: 1.9, objective: 'Reactivate leads', startedAt: '2026-05-20' },
+  { id: 'c7', name: 'WhatsApp · Reminder', channel: 'WhatsApp', channelColor: 'emerald', status: 'active', spend: 41000, budget: 52000, pacingPct: 79, results: 128, cac: 406, roas: 3.1, objective: 'Abandoned checkout', startedAt: '2026-06-05' },
+  { id: 'c8', name: 'Search · Competitor', channel: 'Google', channelColor: 'amber', status: 'paused', spend: 22000, budget: 40000, pacingPct: 55, results: 40, cac: 550, roas: 1.7, objective: 'Conquesting', startedAt: '2026-06-28' },
+]
+const AD_GROUPS: AdGroup[] = [
+  { id: 'ag1', name: 'Age 30–45 · Metro', status: 'active', spend: 78000, results: 240 },
+  { id: 'ag2', name: 'Age 45–60 · Metro', status: 'active', spend: 54000, results: 150 },
+  { id: 'ag3', name: 'Retarget · 7d site', status: 'paused', spend: 24000, results: 68 },
+]
+const CREATIVE_ASSETS: CreativeAsset[] = [
+  { id: 'cr1', kind: 'video', label: '"Retire at 50" · Reel', status: 'live', grad: ['violet', 'sky'] },
+  { id: 'cr2', kind: 'image', label: '"₹999 = clarity" · Static', status: 'live', grad: ['sky', 'emerald'] },
+  { id: 'cr3', kind: 'image', label: '"Tax season" · Carousel', status: 'review', grad: ['amber', 'rose'] },
+  { id: 'cr4', kind: 'copy', label: 'Primary text · v3', status: 'draft', grad: ['violet', 'rose'] },
+]
+export function campaignDetail(id: string): CampaignDetail {
+  const campaign = campaignsFull.find((c) => c.id === id) ?? campaignsFull[0]
+  const series = [22, 26, 24, 30, 28, 34, 33, 38, 36, 41, 40, 44, 43, 48]
+  return { campaign, adGroups: AD_GROUPS, creatives: CREATIVE_ASSETS, series }
+}
+export const briefDefaults: Brief = { audience: 'Salaried professionals, 30–45, metros', hook: 'Financial clarity in 20 minutes', offer: '₹999 Financial Health Checkup', format: 'image' }
+export const promptTemplates: PromptTemplate[] = [
+  { id: 'p1', title: 'Ad brief', body: 'Write a Meta ad brief for the ₹999 Financial Health Checkup targeting ' },
+  { id: 'p2', title: 'Audience analysis', body: 'Analyse the top-converting audience segment for the last 30 days and suggest ' },
+  { id: 'p3', title: 'Reply drafting', body: 'Draft a WhatsApp reply to a lead who asked about ' },
+  { id: 'p4', title: 'Report writing', body: 'Write a weekly performance summary for Finnovate covering CAC, checkups and ' },
+]
+export const approvals: ApprovalItem[] = [
+  { id: 'a1', agent: 'Media Buyer', agentCode: 'MB', action: 'Budget shift', summary: '+₹15K to Lookalike 2%', payload: 'Move ₹15,000/day from FHC · Prospecting (CAC ₹612) to FHC · Lookalike 2% (CAC ₹455).', proposedAt: '14:02', checks: [{ label: 'Within daily cap', status: 'pass' }, { label: 'CAC guardrail', status: 'pass' }, { label: 'Pacing > 90%', status: 'warn' }] },
+  { id: 'a2', agent: 'Creative', agentCode: 'CR', action: 'Ship creative', summary: 'Ship 4 new reels', payload: 'Publish 4 reel variants (V-14…V-17) to Reels · Awareness. All passed the SEBI compliance gate.', proposedAt: '13:30', checks: [{ label: 'SEBI compliance', status: 'pass' }, { label: 'Brand lock', status: 'pass' }] },
+  { id: 'a3', agent: 'Audience', agentCode: 'AU', action: 'Suppression list', summary: 'New suppression list', payload: 'Suppress 1,240 contacts who opted out in the last 24h across Meta + WhatsApp.', proposedAt: '11:15', checks: [{ label: 'Consent / DPDP', status: 'pass' }, { label: 'Hashed PII only', status: 'pass' }] },
+]
+export const integrationsFull: IntegrationDetail[] = [
+  { id: 'i1', name: 'Meta Ads', auth: 'OAuth 2.1', status: 'healthy', scopes: ['ads_read', 'ads_management'], lastSync: '2m ago', calls: '3,412', grad: ['violet', 'sky'] },
+  { id: 'i2', name: 'Google Ads', auth: 'OAuth 2.1', status: 'healthy', scopes: ['adwords'], lastSync: '1m ago', calls: '2,180', grad: ['amber', 'rose'] },
+  { id: 'i3', name: 'GA4', auth: 'OAuth 2.1', status: 'healthy', scopes: ['analytics.readonly'], lastSync: '4m ago', calls: '1,024', grad: ['sky', 'emerald'] },
+  { id: 'i4', name: 'WhatsApp / BSP', auth: 'API key', status: 'degraded', scopes: ['messages', 'templates'], lastSync: '18m ago', calls: '642', grad: ['emerald', 'sky'] },
+  { id: 'i5', name: 'Instantly', auth: 'API key', status: 'healthy', scopes: ['campaigns', 'inbox'], lastSync: '3m ago', calls: '918', grad: ['violet', 'emerald'] },
+  { id: 'i6', name: 'Mailchimp', auth: 'OAuth 2.1', status: 'healthy', scopes: ['audiences', 'campaigns'], lastSync: '6m ago', calls: '204', grad: ['amber', 'violet'] },
+  { id: 'i7', name: 'n8n', auth: 'token', status: 'paused', scopes: ['workflows'], lastSync: '2h ago', calls: '0', grad: ['rose', 'amber'] },
+  { id: 'i8', name: 'Segment', auth: 'API key', status: 'disconnected', scopes: [], lastSync: '—', calls: '0', grad: ['sky', 'violet'] },
 ]

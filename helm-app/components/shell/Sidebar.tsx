@@ -19,6 +19,7 @@ import { NAV } from '@/lib/nav'
 import { can } from '@/lib/rbac'
 import type { Role } from '@/lib/types'
 import { useTenant } from '@/lib/tenant'
+import { useApprovals } from '@/lib/approvals'
 
 const ICONS = {
   LayoutDashboard,
@@ -37,6 +38,7 @@ const ICONS = {
 export function Sidebar({ role }: { role: Role }) {
   const pathname = usePathname()
   const { tenant } = useTenant()
+  const { pending } = useApprovals()
   const visible = NAV.filter((it) => !it.cap || can(role, it.cap))
   const operate = visible.filter((it) => it.section === 'operate')
   const master = visible.filter((it) => it.section === 'master')
@@ -68,11 +70,12 @@ export function Sidebar({ role }: { role: Role }) {
         {operate.map((it) => {
           const Icon = ICONS[it.icon as keyof typeof ICONS]
           const href = '/' + it.page
+          const badge = it.page === 'approvals' ? pending : it.badge
           return (
             <Link key={it.page} href={href} className={pathname === href ? 'active' : undefined}>
               <Icon />
               {it.label}
-              {it.badge != null && <span className="badge">{it.badge}</span>}
+              {badge ? <span className="badge">{badge}</span> : null}
             </Link>
           )
         })}
