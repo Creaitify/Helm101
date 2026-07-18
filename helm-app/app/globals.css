@@ -275,3 +275,22 @@ tbody tr:hover{background:var(--card-2)}
 .cre{display:flex;flex-direction:column;gap:8px}
 .cre-thumb{height:80px;border-radius:12px;display:grid;place-items:center;color:#fff;font-weight:700;font-size:11px;text-transform:uppercase}
 .cre-meta .t{font-size:12px;font-weight:600;margin-bottom:4px}
+.studio{display:grid;grid-template-columns:320px 1fr;gap:14px}
+.studio-brief{align-self:start}
+.field{display:flex;flex-direction:column;gap:5px;font-size:11px;color:var(--dim);font-weight:600}
+.field input,.field select{background:var(--card-2);border:1px solid var(--line);border-radius:10px;padding:9px 11px;color:var(--text);font-size:13px;font-family:inherit}
+.var-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.var{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:12px;display:flex;flex-direction:column;gap:9px}
+.var-thumb{height:120px;border-radius:12px;display:grid;place-items:center;text-align:center;padding:12px;color:#fff;font-weight:700;font-size:14px}
+.var-copy{background:var(--card-2);border-radius:12px;padding:14px;font-size:13px;min-height:120px}
+.var-foot{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.gate{font-size:10px;font-weight:700;padding:3px 9px;border-radius:var(--pill)}
+.gate.pass{background:color-mix(in srgb,var(--emerald) 15%,transparent);color:var(--good)}
+.gate.flag{background:color-mix(in srgb,var(--rose) 15%,transparent);color:var(--bad)}
+.var-flag{font-size:10.5px;color:var(--bad)}
+.skeleton{height:170px;background:linear-gradient(90deg,var(--card),var(--card-2),var(--card));background-size:200% 100%;animation:sk 1.2s infinite}
+@keyframes sk{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.ship-strip{display:flex;flex-wrap:wrap;gap:8px}
+.ship-chip{display:flex;flex-direction:column;gap:2px;background:var(--card-2);border:1px solid var(--line);border-radius:12px;padding:9px 12px;font-size:12px;font-weight:600}
+.ship-chip .num{font-size:10px;color:var(--faint)}
+@media(max-width:820px){.studio{grid-template-columns:1fr}}

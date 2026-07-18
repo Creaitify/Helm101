@@ -1,0 +1,71 @@
+'use client'
+import { useState, useRef, useEffect } from 'react'
+import type { Brief, Variant } from '@/lib/types'
+import { buildVariants } from '@/lib/studio'
+import { Card } from '@/components/ui/Card'
+import { Button } from '@/components/ui/Button'
+
+export function StudioView({ brief }: { brief: Brief }) {
+  const [form, setForm] = useState<Brief>(brief)
+  const [phase, setPhase] = useState<'idle' | 'generating' | 'done'>('idle')
+  const [variants, setVariants] = useState<Variant[]>([])
+  const [shipped, setShipped] = useState<Variant[]>([])
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current) }, [])
+
+  function generate() {
+    setPhase('generating'); setVariants([])
+    timer.current = setTimeout(() => { setVariants(buildVariants(form)); setPhase('done') }, 1000)
+  }
+  function ship(v: Variant) {
+    setShipped((s) => [...s, v]); setVariants((vs) => vs.filter((x) => x.id !== v.id))
+  }
+
+  return (
+    <div className="content">
+      <div className="phead"><div><h1>Creative Studio</h1><p>Brief → generate → SEBI gate → ship</p></div></div>
+      <div className="studio">
+        <Card className="studio-brief">
+          <div className="card-h"><div><h3>Brief</h3></div></div>
+          <label className="field"><span>Audience</span><input value={form.audience} onChange={(e) => setForm({ ...form, audience: e.target.value })} /></label>
+          <label className="field"><span>Hook</span><input value={form.hook} onChange={(e) => setForm({ ...form, hook: e.target.value })} /></label>
+          <label className="field"><span>Offer</span><input value={form.offer} onChange={(e) => setForm({ ...form, offer: e.target.value })} /></label>
+          <label className="field"><span>Format</span>
+            <select value={form.format} onChange={(e) => setForm({ ...form, format: e.target.value as Brief['format'] })}>
+              <option value="image">Image</option><option value="video">Video</option><option value="copy">Copy</option>
+            </select>
+          </label>
+          <Button variant="primary" onClick={generate}>Generate</Button>
+        </Card>
+        <div className="studio-out">
+          {phase === 'generating' && <div className="var-grid">{[0, 1, 2, 3].map((i) => <div key={i} className="var skeleton" />)}</div>}
+          {phase === 'done' && (
+            <>
+              <div className="var-grid">
+                {variants.map((v) => (
+                  <div key={v.id} className="var">
+                    {v.kind === 'image'
+                      ? <div className="var-thumb" style={{ background: `linear-gradient(135deg,var(--${v.grad[0]}),var(--${v.grad[1]}))` }}>{v.headline}</div>
+                      : <div className="var-copy">{v.body}</div>}
+                    <div className="var-foot">
+                      <span className={`gate ${v.compliance}`}>{v.compliance === 'pass' ? 'SEBI pass' : `SEBI flag`}</span>
+                      <Button onClick={() => ship(v)} {...(v.compliance === 'flag' ? { disabled: true } : {})}>Ship</Button>
+                    </div>
+                    {v.flagReason && <div className="var-flag">{v.flagReason}</div>}
+                  </div>
+                ))}
+              </div>
+              {shipped.length > 0 && (
+                <Card>
+                  <div className="card-h"><div><h3>Shipped ({shipped.length})</h3></div></div>
+                  <div className="ship-strip">{shipped.map((v) => <div key={v.id} className="ship-chip">{v.headline}<span className="num">₹{300 + Math.floor(Math.random() * 200)} CAC</span></div>)}</div>
+                </Card>
+              )}
+            </>
+          )}
+          {phase === 'idle' && <Card><div className="empty"><h3>No variants yet</h3><p>Fill the brief and hit Generate to see mock creative variants with a SEBI compliance gate.</p></div></Card>}
+        </div>
+      </div>
+    </div>
+  )
+}
