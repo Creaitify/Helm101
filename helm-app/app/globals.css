@@ -262,3 +262,16 @@ tbody tr:hover{background:var(--card-2)}
 .fselect,.fsearch{background:var(--card);border:1px solid var(--line);border-radius:var(--pill);padding:8px 13px;color:var(--text);font-size:12.5px;font-family:inherit}
 .fsearch{min-width:220px}
 .fselect:focus,.fsearch:focus{outline:none;border-color:color-mix(in srgb,var(--violet) 45%,transparent)}
+/* Campaigns */
+.pace{display:flex;align-items:center;gap:8px}
+.pace .minibar{flex:1;max-width:90px}
+.minibar{height:6px;border-radius:4px;background:var(--card-2);overflow:hidden;min-width:60px}
+.minibar>i{display:block;height:100%;border-radius:4px}
+.so-meta{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.so-meta > div{display:flex;flex-direction:column;gap:2px}
+.so-meta .k{font-size:10px;color:var(--faint);text-transform:uppercase;font-weight:600}
+.so-meta .v{font-size:13px;font-weight:600}
+.cre-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.cre{display:flex;flex-direction:column;gap:8px}
+.cre-thumb{height:80px;border-radius:12px;display:grid;place-items:center;color:#fff;font-weight:700;font-size:11px;text-transform:uppercase}
+.cre-meta .t{font-size:12px;font-weight:600;margin-bottom:4px}
