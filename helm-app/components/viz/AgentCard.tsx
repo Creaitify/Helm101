@@ -38,7 +38,7 @@ export function AgentCard({ agent }: { agent: Agent }) {
       </div>
       <div className="afoot">
         {agent.tokens} tok · {agent.cost}
-        <Toggle on={agent.enabled} />
+        <Toggle on={agent.enabled} label={`Toggle ${agent.name}`} />
       </div>
     </div>
   )

@@ -40,7 +40,7 @@ export default async function SystemPage() {
                   <div className="t">{flag.title}</div>
                   <div className="d">{flag.desc}</div>
                 </div>
-                <Toggle on={flag.on} />
+                <Toggle on={flag.on} label={`Toggle ${flag.title}`} />
               </div>
             ))}
           </div>
@@ -60,7 +60,7 @@ export default async function SystemPage() {
                   <div className="t">{flag.title}</div>
                   <div className="d">{flag.desc}</div>
                 </div>
-                <Toggle on={flag.on} />
+                <Toggle on={flag.on} label={`Toggle ${flag.title}`} />
               </div>
             ))}
           </div>
