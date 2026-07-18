@@ -5,6 +5,11 @@ export function FunnelChart({ stages }: { stages: FunnelStage[] }) {
     <div className="funnel">
       {stages.map((stage, i) => (
         <div key={stage.label}>
+          {stage.convLabel && (
+            <div className="fconv">
+              <b>{stage.convLabel}</b>
+            </div>
+          )}
           <div className="fs">
             <span className="fl">{stage.label}</span>
             <div className="fbw">
@@ -22,11 +27,6 @@ export function FunnelChart({ stages }: { stages: FunnelStage[] }) {
             </div>
             <span className="fv">{stage.display}</span>
           </div>
-          {stage.convLabel && (
-            <div className="fconv">
-              <b>{stage.convLabel}</b>
-            </div>
-          )}
         </div>
       ))}
     </div>
