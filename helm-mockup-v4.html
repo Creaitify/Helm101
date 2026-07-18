@@ -1,0 +1,617 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>HELM — Control Plane (v4)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0b0d13; --panel:#0e111a; --card:#141824; --card-2:#1b2030; --card-3:#222839;
+  --line:rgba(255,255,255,.08); --line-2:rgba(255,255,255,.14);
+  --text:#e9ecf4; --dim:#939ab1; --faint:#606782;
+  --violet:#8b5cf6; --violet-2:#a78bfa; --indigo:#6366f1;
+  --emerald:#34d399; --sky:#38bdf8; --amber:#fbbf24; --rose:#fb7185; --lime:#a3e635;
+  --good:#34d399; --bad:#fb7185; --warn:#fbbf24;
+  --radius:16px; --pill:999px;
+  --font:'Open Sans',system-ui,-apple-system,'Segoe UI',sans-serif;
+  --glow:rgba(139,92,246,.10);
+}
+html[data-theme="light"]{
+  --bg:#f3f5fa; --panel:#ffffff; --card:#ffffff; --card-2:#f2f5fb; --card-3:#e9edf6;
+  --line:rgba(20,25,50,.09); --line-2:rgba(20,25,50,.16);
+  --text:#161a2b; --dim:#5a6178; --faint:#949bb1;
+  --violet:#7c3aed; --violet-2:#6d28d9; --indigo:#4f46e5;
+  --emerald:#059669; --sky:#0284c7; --amber:#d97706; --rose:#e11d48; --lime:#65a30d;
+  --good:#059669; --bad:#e11d48; --warn:#d97706;
+  --glow:rgba(124,58,237,.06);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:var(--font);line-height:1.5;-webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums}
+.num,.mono{font-variant-numeric:tabular-nums}
+.app{display:grid;grid-template-columns:242px 1fr;min-height:100vh}
+
+/* Sidebar — neutral dark panel, violet only as accent */
+.side{position:sticky;top:0;height:100vh;overflow-y:auto;padding:16px 12px;display:flex;flex-direction:column;gap:3px;background:var(--panel);border-right:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:11px;padding:6px 8px 14px}
+.brand .mark{width:34px;height:34px;border-radius:11px;background:linear-gradient(135deg,var(--violet),var(--indigo));display:grid;place-items:center;color:#fff;font-weight:800;font-size:16px}
+.brand b{font-weight:800;letter-spacing:.4px;font-size:16px}
+.brand small{display:block;color:var(--faint);font-weight:600;letter-spacing:1.3px;font-size:8.5px;margin-top:0}
+.wsw{display:flex;align-items:center;gap:9px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:8px 11px;margin:0 4px 8px;cursor:pointer}
+.wsw .d{width:24px;height:24px;border-radius:7px;background:linear-gradient(135deg,var(--sky),var(--violet));display:grid;place-items:center;font-size:10px;color:#fff;font-weight:700}
+.wsw .t{flex:1;min-width:0}
+.wsw .t b{font-size:12.5px;font-weight:700;display:block;line-height:1.2}
+.wsw .t span{font-size:9.5px;color:var(--faint)}
+.wsw svg{width:14px;height:14px;stroke:var(--dim);fill:none;stroke-width:2}
+.role-chip{margin:0 4px 8px;padding:7px 11px;border-radius:10px;font-size:10px;font-weight:700;letter-spacing:.4px;
+  background:color-mix(in srgb,var(--violet) 12%,transparent);border:1px solid color-mix(in srgb,var(--violet) 26%,transparent);color:var(--violet-2);display:flex;align-items:center;gap:8px}
+.role-chip .k{width:6px;height:6px;border-radius:50%;background:var(--emerald);box-shadow:0 0 8px var(--emerald)}
+.nlabel{color:var(--faint);font-size:9.5px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;padding:12px 12px 5px}
+.nav a{display:flex;align-items:center;gap:12px;padding:9px 11px;border-radius:11px;color:var(--dim);text-decoration:none;font-size:13px;font-weight:600;cursor:pointer;transition:background .15s,color .15s}
+.nav a svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.nav a:hover{background:var(--card);color:var(--text)}
+.nav a.active{background:color-mix(in srgb,var(--violet) 16%,transparent);color:var(--violet-2)}
+.nav a.active svg{stroke:var(--violet-2)}
+.nav a .badge{margin-left:auto;background:var(--rose);color:#fff;font-size:9px;font-weight:800;padding:1px 6px;border-radius:var(--pill)}
+.side .user{margin-top:auto;display:flex;align-items:center;gap:10px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:9px 11px}
+.side .user .av{width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,var(--amber),var(--rose));display:grid;place-items:center;font-weight:700;font-size:12px;color:#fff}
+.side .user .t b{font-size:12px;font-weight:700;display:block;line-height:1.2}
+.side .user .t span{font-size:9.5px;color:var(--faint)}
+
+/* Main */
+.main{display:flex;flex-direction:column;min-width:0;background:var(--bg);background-image:radial-gradient(700px 380px at 100% -12%, var(--glow), transparent 60%)}
+.top{display:flex;align-items:center;gap:12px;padding:14px 24px;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--bg) 84%,transparent);backdrop-filter:blur(14px)}
+.search{flex:1;max-width:400px;background:var(--card);border:1px solid var(--line);border-radius:var(--pill);padding:9px 15px;color:var(--faint);font-size:12.5px;display:flex;align-items:center;gap:9px}
+.search .kbd{margin-left:auto;font-size:10px;font-weight:600;border:1px solid var(--line-2);border-radius:6px;padding:1px 6px}
+.top .spacer{flex:1}
+.live{display:flex;align-items:center;gap:7px;font-size:11px;font-weight:600;color:var(--emerald);background:color-mix(in srgb,var(--emerald) 12%,transparent);border:1px solid color-mix(in srgb,var(--emerald) 28%,transparent);padding:6px 12px;border-radius:var(--pill)}
+.live .p{width:6px;height:6px;border-radius:50%;background:var(--emerald);animation:pulse 1.8s infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(52,211,153,.5)}70%{box-shadow:0 0 0 6px rgba(52,211,153,0)}100%{box-shadow:0 0 0 0 rgba(52,211,153,0)}}
+.btn{font-weight:700;font-size:12.5px;padding:9px 17px;border-radius:var(--pill);border:1px solid var(--line-2);background:var(--card);color:var(--text);cursor:pointer;display:flex;align-items:center;gap:7px}
+.btn.primary{background:linear-gradient(135deg,var(--violet),var(--indigo));border-color:transparent;color:#fff;box-shadow:0 6px 18px var(--glow)}
+.ibtn{width:38px;height:38px;border-radius:var(--pill);border:1px solid var(--line);background:var(--card);color:var(--dim);display:grid;place-items:center;cursor:pointer}
+.ibtn:hover{color:var(--text)}
+.ibtn svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+
+.content{padding:20px 24px 32px;display:flex;flex-direction:column;gap:15px;max-width:1560px;width:100%;margin:0 auto}
+.phead{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.phead h1{font-size:23px;font-weight:800;letter-spacing:-.3px;display:flex;align-items:center;gap:11px}
+.phead .tag{font-size:10px;font-weight:700;color:var(--violet-2);background:color-mix(in srgb,var(--violet) 14%,transparent);border:1px solid color-mix(in srgb,var(--violet) 26%,transparent);border-radius:var(--pill);padding:3px 10px}
+.phead p{color:var(--dim);font-size:12.5px;margin-top:4px}
+.seg{display:flex;background:var(--card);border:1px solid var(--line);border-radius:var(--pill);padding:3px}
+.seg button{border:0;background:transparent;color:var(--dim);font-size:11.5px;font-weight:700;padding:6px 13px;border-radius:var(--pill);cursor:pointer;font-family:inherit}
+.seg button.on{background:color-mix(in srgb,var(--violet) 20%,transparent);color:var(--violet-2)}
+
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:16px;display:flex;flex-direction:column;gap:13px;position:relative}
+.card-h{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.card-h h3{font-size:14px;font-weight:700}
+.card-h .sub{color:var(--faint);font-size:11px;margin-top:2px;font-weight:400}
+.pill{font-size:10px;font-weight:600;padding:3px 10px;border-radius:var(--pill);background:var(--card-2);color:var(--dim);border:1px solid var(--line)}
+.pill.v{color:var(--violet-2);border-color:color-mix(in srgb,var(--violet) 30%,transparent)}
+.pill.e{color:var(--emerald)}
+.pill.r{color:var(--rose)}
+.ai{display:flex;align-items:center;gap:7px;font-size:11px;font-weight:600;color:var(--violet-2);background:color-mix(in srgb,var(--violet) 10%,transparent);border:1px solid color-mix(in srgb,var(--violet) 22%,transparent);padding:8px 11px;border-radius:11px}
+.ai svg{width:14px;height:14px;flex:none}
+
+/* KPI */
+.hero{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:16px;position:relative;overflow:hidden;display:flex;flex-direction:column;gap:9px;min-height:118px}
+.kpi .kl{color:var(--dim);font-size:11.5px;font-weight:600}
+.kpi .kv{font-size:30px;font-weight:800;letter-spacing:-1px;line-height:1}
+.kpi .kv small{font-size:15px;color:var(--dim);font-weight:600;margin-left:2px}
+.kpi .kd{font-size:11.5px;font-weight:600;display:flex;align-items:center;gap:5px}
+.kpi .kd.up{color:var(--good)} .kpi .kd.down{color:var(--bad)}
+.kpi .fill{position:absolute;left:0;right:0;bottom:0;height:46px}
+
+.mstrip{display:grid;grid-template-columns:repeat(8,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.mcell{background:var(--card);padding:12px 13px;display:flex;flex-direction:column;gap:4px}
+.mcell .ml{font-size:9.5px;color:var(--faint);letter-spacing:.3px;text-transform:uppercase;font-weight:600}
+.mcell .mv{font-size:15px;font-weight:700}
+.mcell .md{font-size:9.5px;font-weight:600}
+.md.up{color:var(--good)} .md.down{color:var(--bad)} .md.flat{color:var(--faint)}
+
+.grid{display:grid;grid-template-columns:1fr 300px;gap:14px}
+.bento{display:grid;grid-template-columns:repeat(12,1fr);gap:14px}
+.col7{grid-column:span 7}.col5{grid-column:span 5}.col4{grid-column:span 4}.col6{grid-column:span 6}.col8{grid-column:span 8}.col3{grid-column:span 3}
+.legend{display:flex;gap:13px;flex-wrap:wrap;font-size:11px;color:var(--dim);font-weight:600}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend i{width:9px;height:9px;border-radius:3px}
+
+.rail{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:14px;display:flex;flex-direction:column;gap:2px;align-self:start}
+.rail-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+.rail-h b{font-size:13px;font-weight:700;display:flex;align-items:center;gap:7px}
+.rail-h b i{width:6px;height:6px;border-radius:50%;background:var(--emerald);animation:pulse 1.8s infinite}
+.ev{display:flex;align-items:flex-start;gap:10px;padding:9px 0;border-top:1px solid var(--line)}
+.ev:first-of-type{border-top:none}
+.ev .dot{width:6px;height:6px;border-radius:50%;margin-top:6px;flex:none}
+.ev .m{flex:1;min-width:0}
+.ev .m .t{font-size:12px;font-weight:600}
+.ev .m .s{font-size:10px;color:var(--faint);margin-top:1px}
+.ev .r{text-align:right}
+.ev .r .lat{color:var(--dim);font-size:11px;font-weight:600}
+.ev .r .tok{color:var(--faint);font-size:9.5px}
+.tagx{font-size:9px;font-weight:700;padding:1px 6px;border-radius:6px}
+.tagx.err{background:color-mix(in srgb,var(--rose) 15%,transparent);color:var(--bad)}
+.tagx.retry{background:color-mix(in srgb,var(--amber) 15%,transparent);color:var(--warn)}
+
+.funnel{display:flex;flex-direction:column;gap:7px}
+.fs{display:grid;grid-template-columns:90px 1fr 58px;align-items:center;gap:10px}
+.fs .fl{font-size:11.5px;color:var(--dim);font-weight:600}
+.fbw{background:var(--card-2);border-radius:8px;height:26px;overflow:hidden}
+.fb{height:100%;border-radius:8px;display:flex;align-items:center;padding:0 10px;font-size:11px;font-weight:700;color:#fff}
+.fs .fv{font-size:12px;font-weight:700;text-align:right}
+.fconv{font-size:10px;color:var(--faint);text-align:center;margin:-3px 0 -3px 100px;font-weight:600}
+.fconv b{color:var(--violet-2)}
+
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;color:var(--faint);font-weight:700;font-size:9.5px;letter-spacing:.5px;text-transform:uppercase;padding:0 9px 9px}
+th.r,td.r{text-align:right}
+td{padding:10px 9px;border-top:1px solid var(--line);vertical-align:middle;font-size:12px}
+td.name{font-weight:600}
+tbody tr:hover{background:var(--card-2)}
+.chan{display:flex;align-items:center;gap:8px;font-weight:600}
+.chan i{width:8px;height:8px;border-radius:3px}
+.msplit{display:flex;height:9px;border-radius:6px;overflow:hidden;background:var(--card-2)}
+.msplit i{display:block;height:100%}
+.mrow{display:flex;align-items:center;gap:9px;font-size:11.5px;padding:8px 0;border-top:1px solid var(--line)}
+.mrow:first-child{border:none}
+.mrow .sw{width:9px;height:9px;border-radius:3px}
+.mrow .nm{flex:1;font-weight:600}
+.mrow .tk{color:var(--dim)}
+.mrow .pc{color:var(--faint);width:46px;text-align:right;font-weight:600}
+.status{font-size:10px;font-weight:600;padding:2px 9px;border-radius:var(--pill);display:inline-flex;align-items:center;gap:5px}
+.status.on{background:color-mix(in srgb,var(--emerald) 14%,transparent);color:var(--good)}
+.status.rev{background:color-mix(in srgb,var(--amber) 14%,transparent);color:var(--warn)}
+.status.off{background:var(--card-2);color:var(--faint)}
+.status i{width:5px;height:5px;border-radius:50%;background:currentColor}
+.over{color:var(--bad)} .ok{color:var(--good)}
+
+.gauges{display:flex;justify-content:space-around;gap:8px;flex-wrap:wrap}
+.gauge{display:flex;flex-direction:column;align-items:center;gap:6px}
+.gauge .lab{font-size:10px;color:var(--dim);font-weight:600}
+.gwrap{position:relative;width:80px;height:80px}
+.gwrap .val{position:absolute;inset:0;display:grid;place-items:center;font-weight:800;font-size:15px}
+
+.lead{display:flex;flex-direction:column;gap:9px}
+.lrow{display:flex;align-items:center;gap:11px}
+.lthumb{width:40px;height:40px;border-radius:11px;flex:none;display:grid;place-items:center;font-size:9px;color:#fff;font-weight:800}
+.lmeta{flex:1;min-width:0}
+.lmeta .t{font-size:12px;font-weight:600}
+.lmeta .s{font-size:10px;color:var(--faint)}
+.lmeta .bar{height:5px;border-radius:4px;background:var(--card-2);margin-top:5px;overflow:hidden}
+.lmeta .bar>i{display:block;height:100%;background:linear-gradient(90deg,var(--violet),var(--sky))}
+.lstat{font-size:13px;font-weight:800;text-align:right}
+.lstat small{display:block;font-size:9px;color:var(--faint);font-weight:600}
+
+.heat{display:grid;grid-template-columns:auto repeat(12,1fr);gap:3px;font-size:9px}
+.heat .hr{color:var(--faint);align-self:center;padding-right:4px;font-weight:600}
+.heat .hc{aspect-ratio:1;border-radius:4px}
+.heat .hh{color:var(--faint);text-align:center}
+
+.agent-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.agent{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:14px;display:flex;flex-direction:column;gap:10px}
+.agent .ah{display:flex;align-items:center;gap:10px}
+.agent .aic{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;font-weight:800;font-size:11px;color:#fff}
+.agent .an{font-weight:700;font-size:13px}
+.agent .arole{font-size:9.5px;color:var(--faint)}
+.tier{font-size:9px;font-weight:700;padding:2px 8px;border-radius:var(--pill);margin-left:auto}
+.tier.auto{background:color-mix(in srgb,var(--emerald) 14%,transparent);color:var(--good)}
+.tier.prop{background:color-mix(in srgb,var(--amber) 14%,transparent);color:var(--warn)}
+.tier.man{background:color-mix(in srgb,var(--indigo) 22%,transparent);color:var(--violet-2)}
+.astats{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.astat{background:var(--card-2);border-radius:10px;padding:8px 10px}
+.astat .l{font-size:9px;color:var(--faint);text-transform:uppercase;font-weight:600}
+.astat .v{font-size:13px;font-weight:700;margin-top:1px}
+.afoot{display:flex;align-items:center;gap:8px;font-size:10px;color:var(--faint);font-weight:600}
+.toggle{width:36px;height:20px;border-radius:var(--pill);background:var(--card-3);border:1px solid var(--line-2);position:relative;cursor:pointer;margin-left:auto;flex:none}
+.toggle.on{background:linear-gradient(90deg,var(--violet),var(--indigo));border-color:transparent}
+.toggle::after{content:"";position:absolute;top:1.5px;left:2px;width:15px;height:15px;border-radius:50%;background:#fff;transition:.2s}
+.toggle.on::after{left:17px}
+
+.matrix{width:100%;border-collapse:collapse;font-size:11px}
+.matrix th{padding:8px 6px;text-align:center;color:var(--dim);font-size:10px}
+.matrix th:first-child{text-align:left}
+.matrix td{padding:9px 6px;text-align:center;border-top:1px solid var(--line)}
+.matrix td:first-child{text-align:left;font-weight:600}
+.chk{width:16px;height:16px;border-radius:6px;display:inline-grid;place-items:center;font-size:10px}
+.chk.y{background:color-mix(in srgb,var(--emerald) 16%,transparent);color:var(--good)}
+.chk.n{background:var(--card-2);color:var(--faint)}
+.chk.p{background:color-mix(in srgb,var(--amber) 16%,transparent);color:var(--warn)}
+
+.budget{display:flex;flex-direction:column;gap:12px}
+.brow{display:flex;flex-direction:column;gap:5px}
+.brow .bt{display:flex;justify-content:space-between;font-size:11.5px;font-weight:600}
+.brow .bt .bv{color:var(--dim)}
+.bbar{height:9px;border-radius:6px;background:var(--card-2);overflow:hidden}
+.bbar>i{display:block;height:100%;border-radius:6px}
+.flags{display:flex;flex-direction:column}
+.flag{display:flex;align-items:center;gap:11px;padding:12px 0;border-top:1px solid var(--line)}
+.flag:first-child{border:none}
+.flag .fn{flex:1}
+.flag .fn .t{font-size:12.5px;font-weight:600}
+.flag .fn .d{font-size:10.5px;color:var(--faint)}
+.kill{display:flex;align-items:center;gap:12px;background:color-mix(in srgb,var(--rose) 9%,transparent);border:1px solid color-mix(in srgb,var(--rose) 28%,transparent);border-radius:var(--radius);padding:15px 16px}
+.kill .kb{background:var(--bad);color:#fff;border:none;font-weight:800;font-size:12.5px;padding:11px 18px;border-radius:var(--pill);cursor:pointer;font-family:inherit}
+.kill .kt{flex:1}
+.kill .kt b{font-weight:800;font-size:14px}
+.kill .kt div{font-size:11px;color:var(--dim);margin-top:2px}
+
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:70px 20px;text-align:center}
+.empty .ec{width:56px;height:56px;border-radius:16px;background:var(--card-2);display:grid;place-items:center;color:var(--violet-2)}
+.empty .ec svg{width:26px;height:26px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.empty h3{font-size:16px;font-weight:700}
+.empty p{color:var(--dim);font-size:12.5px;max-width:400px}
+
+.hidden{display:none}
+.foot-note{color:var(--faint);font-size:10.5px;text-align:center;padding:8px 0;font-weight:600}
+@media(max-width:1240px){.hero{grid-template-columns:repeat(2,1fr)}.grid{grid-template-columns:1fr}.mstrip{grid-template-columns:repeat(4,1fr)}.agent-grid{grid-template-columns:repeat(2,1fr)}
+  .col7,.col5,.col4,.col6,.col8,.col3{grid-column:span 12}}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand"><span class="mark">H</span><div><b>HELM</b><small>CONTROL PLANE</small></div></div>
+    <div class="wsw"><span class="d">F</span><div class="t"><b>Finnovate</b><span>ap-south-1 · prod</span></div><svg viewBox="0 0 24 24"><path d="M8 9l4 4 4-4"/></svg></div>
+    <div class="role-chip"><span class="k"></span>MASTER ADMIN · root</div>
+    <div class="nlabel">Operate</div>
+    <nav class="nav" id="nav">
+      <a class="active" data-page="analytics"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>Analytics</a>
+      <a data-page="campaigns"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>Campaigns</a>
+      <a data-page="studio"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>Creative Studio</a>
+      <a data-page="workspace"><svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>Workspace</a>
+      <a data-page="integrations"><svg viewBox="0 0 24 24"><path d="M6 3v6a6 6 0 0 0 12 0V3"/><path d="M6 21v-4M18 21v-4M4 3h4M16 3h4"/></svg>Integrations</a>
+      <a data-page="approvals"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L20 6"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>Approvals<span class="badge">3</span></a>
+    </nav>
+    <div class="nlabel">Master Console</div>
+    <nav class="nav" id="nav2">
+      <a data-page="agents"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg>Agent Fleet</a>
+      <a data-page="gateway"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18"/></svg>Model Gateway</a>
+      <a data-page="training"><svg viewBox="0 0 24 24"><path d="M4 19V5M4 19h16"/><path d="M8 15l3-4 3 2 4-6"/></svg>Training & Evals</a>
+      <a data-page="rbac"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M17 11l2 2 4-4"/></svg>Access & RBAC</a>
+      <a data-page="system"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg>System Config</a>
+    </nav>
+    <div class="user"><span class="av">AN</span><div class="t"><b>Aniket</b><span>root@letstute</span></div></div>
+  </aside>
+
+  <div class="main">
+    <header class="top">
+      <div class="search"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>Search campaigns, agents, creatives, leads…<span class="kbd">Ctrl K</span></div>
+      <div class="spacer"></div>
+      <div class="live"><span class="p"></span>LIVE · 3 agents active</div>
+      <button class="ibtn" onclick="toggleTheme()" title="Theme"><svg viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>
+      <button class="ibtn"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg></button>
+      <button class="btn primary"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>New Campaign</button>
+    </header>
+
+    <!-- ANALYTICS -->
+    <div class="content page" data-page="analytics">
+      <div class="phead">
+        <div><h1>Performance Overview <span class="tag">FINNOVATE · FHC ₹999</span></h1>
+          <p>Full-funnel campaign intelligence · last 30 days vs. prior period</p></div>
+        <div class="seg"><button>24H</button><button>7D</button><button class="on">30D</button><button>QTD</button><button>YTD</button></div>
+      </div>
+      <div class="hero">
+        <div class="kpi"><div class="kl">Cost per Checkup</div><div class="kv">₹412</div><div class="kd up">▲ 12% better · tgt ₹450</div>
+          <svg class="fill" viewBox="0 0 300 46" preserveAspectRatio="none"><defs><linearGradient id="g1" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--emerald)" stop-opacity=".35"/><stop offset="1" stop-color="var(--emerald)" stop-opacity="0"/></linearGradient></defs><path d="M0,30 L30,32 60,28 90,34 120,30 150,36 180,33 210,38 240,35 270,40 300,38 300,46 0,46Z" fill="url(#g1)"/><polyline fill="none" stroke="var(--emerald)" stroke-width="1.8" points="0,30 30,32 60,28 90,34 120,30 150,36 180,33 210,38 240,35 270,40 300,38"/></svg></div>
+        <div class="kpi"><div class="kl">Checkups Sold</div><div class="kv">1,204</div><div class="kd up">▲ 8.3% · ₹12.0L rev</div>
+          <svg class="fill" viewBox="0 0 300 46" preserveAspectRatio="none"><defs><linearGradient id="g2" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--violet)" stop-opacity=".35"/><stop offset="1" stop-color="var(--violet)" stop-opacity="0"/></linearGradient></defs><path d="M0,36 L30,33 60,34 90,28 120,30 150,24 180,26 210,20 240,22 270,16 300,12 300,46 0,46Z" fill="url(#g2)"/><polyline fill="none" stroke="var(--violet-2)" stroke-width="1.8" points="0,36 30,33 60,34 90,28 120,30 150,24 180,26 210,20 240,22 270,16 300,12"/></svg></div>
+        <div class="kpi"><div class="kl">Blended ROAS</div><div class="kv">2.9<small>×</small></div><div class="kd up">▲ 0.4× vs prior</div>
+          <svg class="fill" viewBox="0 0 300 46" preserveAspectRatio="none"><defs><linearGradient id="g3" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--sky)" stop-opacity=".35"/><stop offset="1" stop-color="var(--sky)" stop-opacity="0"/></linearGradient></defs><path d="M0,34 L30,32 60,30 90,31 120,26 150,28 180,22 210,24 240,18 270,20 300,15 300,46 0,46Z" fill="url(#g3)"/><polyline fill="none" stroke="var(--sky)" stroke-width="1.8" points="0,34 30,32 60,30 90,31 120,26 150,28 180,22 210,24 240,18 270,20 300,15"/></svg></div>
+        <div class="kpi"><div class="kl">Ad Spend</div><div class="kv">₹4.96<small>L</small></div><div class="kd down">▲ 4.1% · 95% of budget</div>
+          <svg class="fill" viewBox="0 0 300 46" preserveAspectRatio="none"><defs><linearGradient id="g4" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--amber)" stop-opacity=".3"/><stop offset="1" stop-color="var(--amber)" stop-opacity="0"/></linearGradient></defs><path d="M0,30 L30,28 60,32 90,26 120,30 150,24 180,28 210,22 240,26 270,20 300,24 300,46 0,46Z" fill="url(#g4)"/><polyline fill="none" stroke="var(--amber)" stroke-width="1.8" points="0,30 30,28 60,32 90,26 120,30 150,24 180,28 210,22 240,26 270,20 300,24"/></svg></div>
+      </div>
+      <div class="mstrip">
+        <div class="mcell"><span class="ml">Impressions</span><span class="mv">2.14M</span><span class="md up">▲ 9.2%</span></div>
+        <div class="mcell"><span class="ml">Reach</span><span class="mv">842K</span><span class="md up">▲ 5.1%</span></div>
+        <div class="mcell"><span class="ml">Frequency</span><span class="mv">2.54</span><span class="md flat">— 0.1</span></div>
+        <div class="mcell"><span class="ml">CTR</span><span class="mv">3.10%</span><span class="md up">▲ 0.3pp</span></div>
+        <div class="mcell"><span class="ml">CPC</span><span class="mv">₹7.48</span><span class="md up">▼ 4%</span></div>
+        <div class="mcell"><span class="ml">CPM</span><span class="mv">₹232</span><span class="md down">▲ 6%</span></div>
+        <div class="mcell"><span class="ml">Lead CVR</span><span class="mv">10.1%</span><span class="md up">▲ 1.2pp</span></div>
+        <div class="mcell"><span class="ml">Quality</span><span class="mv">8.2/10</span><span class="md up">▲ 0.4</span></div>
+        <div class="mcell"><span class="ml">AOV</span><span class="mv">₹999</span><span class="md flat">—</span></div>
+        <div class="mcell"><span class="ml">LTV 90d</span><span class="mv">₹6,840</span><span class="md up">▲ 3%</span></div>
+        <div class="mcell"><span class="ml">LTV:CAC</span><span class="mv">16.6×</span><span class="md up">▲ 1.1×</span></div>
+        <div class="mcell"><span class="ml">Payback</span><span class="mv">11 days</span><span class="md up">▼ 2d</span></div>
+        <div class="mcell"><span class="ml">CPL</span><span class="mv">₹41.5</span><span class="md up">▼ 3%</span></div>
+        <div class="mcell"><span class="ml">Reply Rate</span><span class="mv">24.6%</span><span class="md up">▲ 3pp</span></div>
+        <div class="mcell"><span class="ml">Advisory</span><span class="mv">143</span><span class="md up">▲ 21%</span></div>
+        <div class="mcell"><span class="ml">SEBI Blocks</span><span class="mv">2</span><span class="md flat">wk</span></div>
+      </div>
+      <div class="grid">
+        <div class="card">
+          <div class="card-h"><div><h3>Spend · Revenue · Checkups</h3><div class="sub">daily · 30d + 7d forecast</div></div>
+            <div class="legend"><span><i style="background:var(--amber)"></i>Spend</span><span><i style="background:var(--violet-2)"></i>Revenue</span><span><i style="background:var(--emerald)"></i>Checkups</span></div></div>
+          <svg viewBox="0 0 760 250" width="100%" height="240" preserveAspectRatio="none">
+            <g stroke="var(--line)" stroke-width="1"><line x1="0" y1="50" x2="760" y2="50"/><line x1="0" y1="110" x2="760" y2="110"/><line x1="0" y1="170" x2="760" y2="170"/><line x1="0" y1="230" x2="760" y2="230"/></g>
+            <g fill="var(--card-2)">
+              <rect x="8" y="155" width="16" height="75"/><rect x="34" y="162" width="16" height="68"/><rect x="60" y="146" width="16" height="84"/><rect x="86" y="156" width="16" height="74"/><rect x="112" y="138" width="16" height="92"/><rect x="138" y="150" width="16" height="80"/><rect x="164" y="142" width="16" height="88"/><rect x="190" y="128" width="16" height="102"/><rect x="216" y="146" width="16" height="84"/><rect x="242" y="136" width="16" height="94"/><rect x="268" y="154" width="16" height="76"/><rect x="294" y="126" width="16" height="104"/><rect x="320" y="138" width="16" height="92"/><rect x="346" y="130" width="16" height="100"/><rect x="372" y="142" width="16" height="88"/><rect x="398" y="124" width="16" height="106"/><rect x="424" y="132" width="16" height="98"/><rect x="450" y="138" width="16" height="92"/><rect x="476" y="122" width="16" height="108"/><rect x="502" y="128" width="16" height="102"/><rect x="528" y="134" width="16" height="96"/><rect x="554" y="118" width="16" height="112"/><rect x="580" y="126" width="16" height="104"/><rect x="606" y="132" width="16" height="98"/><rect x="632" y="116" width="16" height="114"/>
+            </g>
+            <defs><linearGradient id="rev" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--violet)" stop-opacity=".22"/><stop offset="1" stop-color="var(--violet)" stop-opacity="0"/></linearGradient></defs>
+            <path d="M16,182 C70,172 100,152 160,148 C230,140 310,122 390,112 C470,102 550,88 650,80 L650,230 L16,230 Z" fill="url(#rev)"/>
+            <polyline fill="none" stroke="var(--violet-2)" stroke-width="2.4" points="16,182 48,174 80,170 112,152 144,148 176,140 208,142 240,130 272,122 304,126 336,114 368,110 400,118 432,100 464,104 496,94 528,86 560,92 592,82 650,80"/>
+            <polyline fill="none" stroke="var(--emerald)" stroke-width="2.4" points="16,198 48,192 80,194 112,180 144,172 176,178 208,168 240,154 272,160 304,148 336,154 368,142 400,148 432,130 464,136 496,124 528,130 560,112 592,118 650,106"/>
+            <polyline fill="none" stroke="var(--violet-2)" stroke-width="2" stroke-dasharray="5 4" opacity=".7" points="650,80 685,74 720,68 755,60"/>
+            <polyline fill="none" stroke="var(--emerald)" stroke-width="2" stroke-dasharray="5 4" opacity=".7" points="650,106 685,98 720,92 755,84"/>
+            <circle cx="650" cy="80" r="3.5" fill="var(--violet-2)"/><circle cx="650" cy="106" r="3.5" fill="var(--emerald)"/>
+          </svg>
+          <div class="ai"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.6 4.8L18 8l-4.4 1.2L12 14l-1.6-4.8L6 8l4.4-1.2z"/></svg>AI insight · revenue is outpacing spend; forecast suggests +9% checkups next week if pacing holds.</div>
+        </div>
+        <div class="rail">
+          <div class="rail-h"><b><i></i>Live Activity</b><span class="pill">auto</span></div>
+          <div class="ev"><span class="dot" style="background:var(--emerald)"></span><div class="m"><div class="t">Media Buyer · budget shift</div><div class="s">₹4K → Retargeting · r_8a3f12</div></div><div class="r"><div class="lat">340ms</div><div class="tok">2.1k tok</div></div></div>
+          <div class="ev"><span class="dot" style="background:var(--amber)"></span><div class="m"><div class="t">Compliance · flag <span class="tagx retry">REVIEW</span></div><div class="s">ad copy V-13 · guaranteed-return</div></div><div class="r"><div class="lat">892ms</div><div class="tok">1.4k tok</div></div></div>
+          <div class="ev"><span class="dot" style="background:var(--violet-2)"></span><div class="m"><div class="t">Reply Router · 12 drafts</div><div class="s">WhatsApp inbound · l_8a3ed1</div></div><div class="r"><div class="lat">1.1s</div><div class="tok">8.0k tok</div></div></div>
+          <div class="ev"><span class="dot" style="background:var(--emerald)"></span><div class="m"><div class="t">Creative · shipped V-14</div><div class="s">Meta · reel 18s</div></div><div class="r"><div class="lat">1.4s</div><div class="tok">18.9k</div></div></div>
+          <div class="ev"><span class="dot" style="background:var(--rose)"></span><div class="m"><div class="t">Audience · sync <span class="tagx err">ERR</span></div><div class="s">WhatsApp BSP degraded</div></div><div class="r"><div class="lat">3.2s</div><div class="tok">640</div></div></div>
+          <div class="ev"><span class="dot" style="background:var(--emerald)"></span><div class="m"><div class="t">Analyst · daily readout</div><div class="s">attribution rebuilt</div></div><div class="r"><div class="lat">720ms</div><div class="tok">7.2k</div></div></div>
+          <div class="ev"><span class="dot" style="background:var(--emerald)"></span><div class="m"><div class="t">Nurture · 88 reminders</div><div class="s">abandoned checkout</div></div><div class="r"><div class="lat">410ms</div><div class="tok">2.0k</div></div></div>
+        </div>
+      </div>
+      <div class="bento">
+        <div class="card col4">
+          <div class="card-h"><div><h3>Conversion Funnel</h3><div class="sub">impression → advisory</div></div><span class="pill v">30D</span></div>
+          <div class="funnel">
+            <div class="fs"><span class="fl">Impressions</span><div class="fbw"><div class="fb" style="width:100%;background:linear-gradient(90deg,var(--violet),var(--indigo))">2.14M</div></div><span class="fv">2.14M</span></div>
+            <div class="fconv"><b>3.1%</b> CTR</div>
+            <div class="fs"><span class="fl">Clicks</span><div class="fbw"><div class="fb" style="width:62%;background:linear-gradient(90deg,var(--violet),var(--indigo))">66.3K</div></div><span class="fv">66.3K</span></div>
+            <div class="fconv"><b>18%</b> capture</div>
+            <div class="fs"><span class="fl">Leads</span><div class="fbw"><div class="fb" style="width:44%;background:linear-gradient(90deg,var(--violet),var(--indigo))">11.9K</div></div><span class="fv">11.9K</span></div>
+            <div class="fconv"><b>10.1%</b> purchase</div>
+            <div class="fs"><span class="fl">Checkups</span><div class="fbw"><div class="fb" style="width:26%;background:linear-gradient(90deg,var(--violet),var(--indigo))">1,204</div></div><span class="fv">1,204</span></div>
+            <div class="fconv"><b>11.9%</b> upsell</div>
+            <div class="fs"><span class="fl">Advisory</span><div class="fbw"><div class="fb" style="width:13%;background:linear-gradient(90deg,var(--emerald),var(--sky))">143</div></div><span class="fv">143</span></div>
+          </div>
+        </div>
+        <div class="card col4">
+          <div class="card-h"><div><h3>Channel Mix</h3><div class="sub">₹8.4L spend · by source</div></div></div>
+          <div class="msplit"><i style="width:47%;background:var(--violet)"></i><i style="width:36%;background:var(--amber)"></i><i style="width:11%;background:var(--emerald)"></i><i style="width:6%;background:var(--sky)"></i></div>
+          <div>
+            <div class="mrow"><span class="sw" style="background:var(--violet)"></span><span class="nm">Meta</span><span class="tk">₹2.31L · 612 ck</span><span class="pc ok">₹377</span></div>
+            <div class="mrow"><span class="sw" style="background:var(--amber)"></span><span class="nm">Google</span><span class="tk">₹1.78L · 401 ck</span><span class="pc">₹444</span></div>
+            <div class="mrow"><span class="sw" style="background:var(--emerald)"></span><span class="nm">WhatsApp</span><span class="tk">₹52K · 128 ck</span><span class="pc ok">₹406</span></div>
+            <div class="mrow"><span class="sw" style="background:var(--sky)"></span><span class="nm">Email</span><span class="tk">₹35K · 63 ck</span><span class="pc over">₹556</span></div>
+          </div>
+        </div>
+        <div class="card col4">
+          <div class="card-h"><div><h3>Goal Attainment</h3><div class="sub">vs. monthly targets</div></div></div>
+          <div class="gauges">
+            <div class="gauge"><div class="gwrap"><svg width="80" height="80" viewBox="0 0 80 80"><circle cx="40" cy="40" r="32" fill="none" stroke="var(--card-2)" stroke-width="7"/><circle cx="40" cy="40" r="32" fill="none" stroke="var(--emerald)" stroke-width="7" stroke-linecap="round" stroke-dasharray="201" stroke-dashoffset="38" transform="rotate(-90 40 40)"/></svg><span class="val">81%</span></div><span class="lab">CAC</span></div>
+            <div class="gauge"><div class="gwrap"><svg width="80" height="80" viewBox="0 0 80 80"><circle cx="40" cy="40" r="32" fill="none" stroke="var(--card-2)" stroke-width="7"/><circle cx="40" cy="40" r="32" fill="none" stroke="var(--violet-2)" stroke-width="7" stroke-linecap="round" stroke-dasharray="201" stroke-dashoffset="18" transform="rotate(-90 40 40)"/></svg><span class="val">92%</span></div><span class="lab">Volume</span></div>
+            <div class="gauge"><div class="gwrap"><svg width="80" height="80" viewBox="0 0 80 80"><circle cx="40" cy="40" r="32" fill="none" stroke="var(--card-2)" stroke-width="7"/><circle cx="40" cy="40" r="32" fill="none" stroke="var(--amber)" stroke-width="7" stroke-linecap="round" stroke-dasharray="201" stroke-dashoffset="90" transform="rotate(-90 40 40)"/></svg><span class="val">55%</span></div><span class="lab">Advisory</span></div>
+          </div>
+        </div>
+        <div class="card col5">
+          <div class="card-h"><div><h3>Performance Heatmap</h3><div class="sub">checkups · day × hour block</div></div><span class="pill e">peak Tue 8pm</span></div>
+          <div class="heat" id="heat"></div>
+        </div>
+        <div class="card col4">
+          <div class="card-h"><div><h3>Creative Leaderboard</h3><div class="sub">top variants by CAC</div></div></div>
+          <div class="lead">
+            <div class="lrow"><div class="lthumb" style="background:linear-gradient(135deg,var(--violet),var(--indigo))">V-07</div><div class="lmeta"><div class="t">"Retire at 50" · Reel</div><div class="s">Meta · video · 18s</div><div class="bar"><i style="width:94%"></i></div></div><div class="lstat">₹298<small>CAC</small></div></div>
+            <div class="lrow"><div class="lthumb" style="background:linear-gradient(135deg,var(--sky),var(--emerald))">V-12</div><div class="lmeta"><div class="t">"₹999 = clarity" · Static</div><div class="s">Meta · image · 1:1</div><div class="bar"><i style="width:82%"></i></div></div><div class="lstat">₹341<small>CAC</small></div></div>
+            <div class="lrow"><div class="lthumb" style="background:linear-gradient(135deg,var(--amber),var(--rose))">V-04</div><div class="lmeta"><div class="t">"Tax season" · Carousel</div><div class="s">Google · image</div><div class="bar"><i style="width:64%"></i></div></div><div class="lstat">₹455<small>CAC</small></div></div>
+          </div>
+        </div>
+        <div class="card col3">
+          <div class="card-h"><div><h3>Approvals</h3><div class="sub">waiting on you</div></div><span class="pill r">3</span></div>
+          <div class="lead">
+            <div class="lrow"><div class="lthumb" style="background:var(--amber);width:32px;height:32px">MB</div><div class="lmeta"><div class="t">+₹15K to Lookalike 2%</div><div class="s">Media Buyer · propose</div></div></div>
+            <div class="lrow"><div class="lthumb" style="background:var(--violet);width:32px;height:32px">CR</div><div class="lmeta"><div class="t">Ship 4 new reels</div><div class="s">Creative · propose</div></div></div>
+            <div class="lrow"><div class="lthumb" style="background:var(--sky);width:32px;height:32px">AU</div><div class="lmeta"><div class="t">New suppression list</div><div class="s">Audience · propose</div></div></div>
+          </div>
+        </div>
+      </div>
+      <div class="foot-note">v4 · Open Sans · sidebar-routed · mock data</div>
+    </div>
+
+    <!-- AGENTS -->
+    <div class="content page hidden" data-page="agents">
+      <div class="phead"><div><h1>Agent Fleet <span class="tag">MASTER CONSOLE</span></h1><p>8 specialists · supervised by Governor · LangGraph durable runtime</p></div><span class="pill v">checkpointer healthy</span></div>
+      <div class="kill">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--bad)" stroke-width="1.8" stroke-linecap="round"><path d="M12 2v10M18.4 6.6a9 9 0 11-12.8 0"/></svg>
+        <div class="kt"><b>Global Kill Switch</b><div>freezes all agent autonomy + model egress instantly · last drill 4d ago</div></div>
+        <button class="kb">ARM KILL SWITCH</button>
+      </div>
+      <div class="agent-grid">
+        <div class="agent"><div class="ah"><div class="aic" style="background:linear-gradient(135deg,var(--violet),var(--indigo))">GV</div><div><div class="an">Governor</div><div class="arole">supervisor</div></div><span class="tier man">HUMAN</span></div><div class="astats"><div class="astat"><div class="l">Runs 24h</div><div class="v">214</div></div><div class="astat"><div class="l">Success</div><div class="v ok">99.1%</div></div></div><div class="afoot">1.2M tok · $18.40<div class="toggle on"></div></div></div>
+        <div class="agent"><div class="ah"><div class="aic" style="background:linear-gradient(135deg,var(--sky),var(--violet))">MB</div><div><div class="an">Media Buyer</div><div class="arole">budget/bid</div></div><span class="tier prop">PROPOSE</span></div><div class="astats"><div class="astat"><div class="l">Runs 24h</div><div class="v">88</div></div><div class="astat"><div class="l">Success</div><div class="v ok">96.4%</div></div></div><div class="afoot">640K tok · $9.20<div class="toggle on"></div></div></div>
+        <div class="agent"><div class="ah"><div class="aic" style="background:linear-gradient(135deg,var(--emerald),var(--sky))">AN</div><div><div class="an">Analyst</div><div class="arole">attribution</div></div><span class="tier auto">AUTO</span></div><div class="astats"><div class="astat"><div class="l">Runs 24h</div><div class="v">312</div></div><div class="astat"><div class="l">Success</div><div class="v ok">99.6%</div></div></div><div class="afoot">890K tok · $11.80<div class="toggle on"></div></div></div>
+        <div class="agent"><div class="ah"><div class="aic" style="background:linear-gradient(135deg,var(--violet),var(--rose))">RR</div><div><div class="an">Reply Router</div><div class="arole">inbound</div></div><span class="tier auto">AUTO</span></div><div class="astats"><div class="astat"><div class="l">Runs 24h</div><div class="v">1.4K</div></div><div class="astat"><div class="l">Success</div><div class="v ok">94.2%</div></div></div><div class="afoot">2.1M tok · $6.40<div class="toggle on"></div></div></div>
+        <div class="agent"><div class="ah"><div class="aic" style="background:linear-gradient(135deg,var(--amber),var(--rose))">AU</div><div><div class="an">Audience</div><div class="arole">segments</div></div><span class="tier prop">PROPOSE</span></div><div class="astats"><div class="astat"><div class="l">Runs 24h</div><div class="v">46</div></div><div class="astat"><div class="l">Success</div><div class="v ok">97.8%</div></div></div><div class="afoot">410K tok · $5.90<div class="toggle on"></div></div></div>
+        <div class="agent"><div class="ah"><div class="aic" style="background:linear-gradient(135deg,var(--emerald),var(--violet))">NU</div><div><div class="an">Nurture</div><div class="arole">retargeting</div></div><span class="tier auto">AUTO</span></div><div class="astats"><div class="astat"><div class="l">Runs 24h</div><div class="v">520</div></div><div class="astat"><div class="l">Success</div><div class="v ok">98.1%</div></div></div><div class="afoot">720K tok · $8.10<div class="toggle on"></div></div></div>
+        <div class="agent"><div class="ah"><div class="aic" style="background:linear-gradient(135deg,var(--rose),var(--violet))">CR</div><div><div class="an">Creative</div><div class="arole">generation</div></div><span class="tier prop">PROPOSE</span></div><div class="astats"><div class="astat"><div class="l">Runs 24h</div><div class="v">72</div></div><div class="astat"><div class="l">Success</div><div class="v">91.0%</div></div></div><div class="afoot">1.5M tok · $34.20<div class="toggle on"></div></div></div>
+        <div class="agent"><div class="ah"><div class="aic" style="background:linear-gradient(135deg,var(--bad),var(--amber))">CO</div><div><div class="an">Compliance</div><div class="arole">SEBI veto</div></div><span class="tier man">VETO</span></div><div class="astats"><div class="astat"><div class="l">Blocks 24h</div><div class="v" style="color:var(--warn)">7</div></div><div class="astat"><div class="l">Coverage</div><div class="v ok">100%</div></div></div><div class="afoot">380K tok · $4.10<div class="toggle on"></div></div></div>
+      </div>
+    </div>
+
+    <!-- GATEWAY -->
+    <div class="content page hidden" data-page="gateway">
+      <div class="phead"><div><h1>Model Gateway <span class="tag">MASTER CONSOLE</span></h1><p>The single door to every model provider · routing, budgets, guardrails, key custody</p></div><span class="pill v">4 providers</span></div>
+      <div class="bento">
+        <div class="card col6">
+          <div class="card-h"><div><h3>Provider Budgets</h3><div class="sub">spend this month</div></div><span class="pill e">0 egress violations</span></div>
+          <div class="budget">
+            <div class="brow"><div class="bt"><span>Anthropic · Claude (reasoning/agents)</span><span class="bv">$412 / $600</span></div><div class="bbar"><i style="width:69%;background:linear-gradient(90deg,var(--violet),var(--indigo))"></i></div></div>
+            <div class="brow"><div class="bt"><span>OpenAI · GPT (copy/aux)</span><span class="bv">$188 / $300</span></div><div class="bbar"><i style="width:63%;background:linear-gradient(90deg,var(--violet),var(--indigo))"></i></div></div>
+            <div class="brow"><div class="bt"><span>Gemini · Nano Banana (image)</span><span class="bv">$96 / $150</span></div><div class="bbar"><i style="width:64%;background:linear-gradient(90deg,var(--violet),var(--indigo))"></i></div></div>
+            <div class="brow"><div class="bt"><span>Gemini · Veo 3.1 (video)</span><span class="bv">$243 / $250</span></div><div class="bbar"><i style="width:97%;background:linear-gradient(90deg,var(--amber),var(--bad))"></i></div></div>
+          </div>
+          <div class="ai"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.6 4.8L18 8l-4.4 1.2L12 14l-1.6-4.8L6 8l4.4-1.2z"/></svg>Veo 3.1 is at 97% of budget — routing will fail over to cached renders at 100%.</div>
+        </div>
+        <div class="card col6">
+          <div class="card-h"><div><h3>Routing Table</h3><div class="sub">logical task → concrete model</div></div></div>
+          <table>
+            <thead><tr><th>Logical task</th><th>Provider · model</th><th class="r">Calls 24h</th><th class="r">Avg latency</th></tr></thead>
+            <tbody>
+              <tr><td class="name">reasoning.plan</td><td>Anthropic · claude</td><td class="r">4,120</td><td class="r">1.2s</td></tr>
+              <tr><td class="name">copy.variant</td><td>OpenAI · gpt</td><td class="r">2,860</td><td class="r">640ms</td></tr>
+              <tr><td class="name">image.generate</td><td>Gemini · nano-banana-2</td><td class="r">312</td><td class="r">3.1s</td></tr>
+              <tr><td class="name">video.generate</td><td>Gemini · veo-3.1</td><td class="r">28</td><td class="r">92s</td></tr>
+              <tr><td class="name">embed</td><td>OpenAI · embeddings</td><td class="r">18,400</td><td class="r">80ms</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="card col6">
+          <div class="card-h"><div><h3>Model Split</h3><div class="sub">8.4M tokens this period</div></div></div>
+          <div class="msplit"><i style="width:52%;background:var(--violet)"></i><i style="width:27%;background:var(--sky)"></i><i style="width:12%;background:var(--emerald)"></i><i style="width:6%;background:var(--amber)"></i><i style="width:3%;background:var(--rose)"></i></div>
+          <div>
+            <div class="mrow"><span class="sw" style="background:var(--violet)"></span><span class="nm">claude-sonnet</span><span class="tk">4.4M</span><span class="pc">52.4%</span></div>
+            <div class="mrow"><span class="sw" style="background:var(--sky)"></span><span class="nm">gpt-4o</span><span class="tk">2.2M</span><span class="pc">26.7%</span></div>
+            <div class="mrow"><span class="sw" style="background:var(--emerald)"></span><span class="nm">claude-haiku</span><span class="tk">966K</span><span class="pc">11.5%</span></div>
+            <div class="mrow"><span class="sw" style="background:var(--amber)"></span><span class="nm">gemini-flash</span><span class="tk">554K</span><span class="pc">6.6%</span></div>
+            <div class="mrow"><span class="sw" style="background:var(--rose)"></span><span class="nm">claude-opus</span><span class="tk">31K</span><span class="pc">0.3%</span></div>
+          </div>
+        </div>
+        <div class="card col6">
+          <div class="card-h"><div><h3>Gateway Guardrails</h3><div class="sub">runs on every model call</div></div><span class="pill">middleware</span></div>
+          <div class="flags">
+            <div class="flag"><div class="fn"><div class="t">Response cache</div><div class="d">41% hit rate · saves ~$180/mo</div></div><div class="toggle on"></div></div>
+            <div class="flag"><div class="fn"><div class="t">Per-tenant rate limits</div><div class="d">120 req/min · burst 240</div></div><div class="toggle on"></div></div>
+            <div class="flag"><div class="fn"><div class="t">Provider failover</div><div class="d">retry on 5xx → secondary provider</div></div><div class="toggle on"></div></div>
+            <div class="flag"><div class="fn"><div class="t">Semantic cache (embeddings)</div><div class="d">dedupe near-identical prompts</div></div><div class="toggle"></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TRAINING -->
+    <div class="content page hidden" data-page="training">
+      <div class="phead"><div><h1>Training & Evals <span class="tag">MASTER CONSOLE</span></h1><p>Custom models (your IP) · fine-tunes, datasets, eval scores, deployment</p></div><button class="btn primary"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>New training job</button></div>
+      <div class="bento">
+        <div class="card col8">
+          <div class="card-h"><div><h3>Jobs & Models</h3><div class="sub">custom algorithms graduating from rules → learned</div></div></div>
+          <table>
+            <thead><tr><th>Model</th><th>Type</th><th>Status</th><th class="r">Metric</th><th class="r">Progress</th></tr></thead>
+            <tbody>
+              <tr><td class="name">Reply-Intent v3</td><td>fine-tune (small)</td><td><span class="status rev"><i></i>running</span></td><td class="r">loss 0.21</td><td class="r">62% · ep 2/3</td></tr>
+              <tr><td class="name">Lead-Score v2</td><td>gradient boosting</td><td><span class="status on"><i></i>deployed</span></td><td class="r ok">AUC 0.88</td><td class="r">100%</td></tr>
+              <tr><td class="name">Creative-Rank</td><td>ranking model</td><td><span class="status off"><i></i>queued</span></td><td class="r">—</td><td class="r">dataset 8.2K</td></tr>
+              <tr><td class="name">Send-Time Optimiser</td><td>rules → learned</td><td><span class="status on"><i></i>deployed</span></td><td class="r ok">+8% opens</td><td class="r">100%</td></tr>
+              <tr><td class="name">Budget-Allocation</td><td>bandit</td><td><span class="status rev"><i></i>shadow</span></td><td class="r">+4% ROAS</td><td class="r">A/B 50%</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="card col4">
+          <div class="card-h"><div><h3>Eval Leaderboard</h3><div class="sub">held-out test set</div></div></div>
+          <div class="lead">
+            <div class="lrow"><div class="lthumb" style="background:linear-gradient(135deg,var(--emerald),var(--sky))">v2</div><div class="lmeta"><div class="t">Lead-Score v2</div><div class="s">AUC 0.88 · +0.05</div><div class="bar"><i style="width:88%"></i></div></div><div class="lstat ok">PASS</div></div>
+            <div class="lrow"><div class="lthumb" style="background:linear-gradient(135deg,var(--violet),var(--sky))">v3</div><div class="lmeta"><div class="t">Reply-Intent v3</div><div class="s">F1 0.79 · training</div><div class="bar"><i style="width:79%"></i></div></div><div class="lstat" style="color:var(--warn)">WIP</div></div>
+            <div class="lrow"><div class="lthumb" style="background:linear-gradient(135deg,var(--amber),var(--rose))">v1</div><div class="lmeta"><div class="t">Creative-Rank v1</div><div class="s">NDCG 0.71 · baseline</div><div class="bar"><i style="width:71%"></i></div></div><div class="lstat" style="color:var(--faint)">HOLD</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RBAC -->
+    <div class="content page hidden" data-page="rbac">
+      <div class="phead"><div><h1>Access & RBAC <span class="tag">MASTER CONSOLE</span></h1><p>Multi-level role-based access · you (Master Admin) sit at the top of every scope</p></div><button class="btn primary"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Invite user</button></div>
+      <div class="bento">
+        <div class="card col7">
+          <div class="card-h"><div><h3>Permission Matrix</h3><div class="sub">roles × capabilities</div></div><span class="pill">6 roles</span></div>
+          <table class="matrix">
+            <thead><tr><th>Capability</th><th>Master</th><th>Agency</th><th>Strat.</th><th>Creative</th><th>Analyst</th><th>Viewer</th></tr></thead>
+            <tbody>
+              <tr><td>System config & agents</td><td><span class="chk y">✓</span></td><td><span class="chk n">·</span></td><td><span class="chk n">·</span></td><td><span class="chk n">·</span></td><td><span class="chk n">·</span></td><td><span class="chk n">·</span></td></tr>
+              <tr><td>Model training / tuning</td><td><span class="chk y">✓</span></td><td><span class="chk p">◐</span></td><td><span class="chk n">·</span></td><td><span class="chk n">·</span></td><td><span class="chk n">·</span></td><td><span class="chk n">·</span></td></tr>
+              <tr><td>Budget shifts</td><td><span class="chk y">✓</span></td><td><span class="chk y">✓</span></td><td><span class="chk y">✓</span></td><td><span class="chk n">·</span></td><td><span class="chk n">·</span></td><td><span class="chk n">·</span></td></tr>
+              <tr><td>Approve creative</td><td><span class="chk y">✓</span></td><td><span class="chk y">✓</span></td><td><span class="chk y">✓</span></td><td><span class="chk p">◐</span></td><td><span class="chk n">·</span></td><td><span class="chk n">·</span></td></tr>
+              <tr><td>Manage integrations</td><td><span class="chk y">✓</span></td><td><span class="chk y">✓</span></td><td><span class="chk n">·</span></td><td><span class="chk n">·</span></td><td><span class="chk n">·</span></td><td><span class="chk n">·</span></td></tr>
+              <tr><td>View analytics</td><td><span class="chk y">✓</span></td><td><span class="chk y">✓</span></td><td><span class="chk y">✓</span></td><td><span class="chk y">✓</span></td><td><span class="chk y">✓</span></td><td><span class="chk y">✓</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="card col5">
+          <div class="card-h"><div><h3>Team Members</h3><div class="sub">Finnovate tenant · 6 users</div></div></div>
+          <table>
+            <thead><tr><th>User</th><th>Role</th><th>Status</th></tr></thead>
+            <tbody>
+              <tr><td class="name">Aniket (you)</td><td>Master Admin</td><td><span class="status on"><i></i>active</span></td></tr>
+              <tr><td class="name">Priya S.</td><td>Agency Admin</td><td><span class="status on"><i></i>active</span></td></tr>
+              <tr><td class="name">Rohan V.</td><td>Strategist</td><td><span class="status on"><i></i>active</span></td></tr>
+              <tr><td class="name">Diya P.</td><td>Creative</td><td><span class="status on"><i></i>active</span></td></tr>
+              <tr><td class="name">Finnovate CMO</td><td>Client Viewer</td><td><span class="status rev"><i></i>invited</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- SYSTEM -->
+    <div class="content page hidden" data-page="system">
+      <div class="phead"><div><h1>System Configuration <span class="tag">MASTER CONSOLE</span></h1><p>Guardrails, feature flags, integration health · enforced below the agents</p></div><span class="pill">tenant-scoped</span></div>
+      <div class="bento">
+        <div class="card col6">
+          <div class="card-h"><div><h3>Guardrails</h3><div class="sub">input + output safety on every LLM call</div></div><span class="pill e">all active</span></div>
+          <div class="flags">
+            <div class="flag"><div class="fn"><div class="t">Prompt-injection guard</div><div class="d">input · blocks tool-hijack on fetched content</div></div><div class="toggle on"></div></div>
+            <div class="flag"><div class="fn"><div class="t">PII detection & redaction</div><div class="d">strip investor PII before provider egress</div></div><div class="toggle on"></div></div>
+            <div class="flag"><div class="fn"><div class="t">SEBI compliance filter</div><div class="d">output · blocks guaranteed-return / misleading claims</div></div><div class="toggle on"></div></div>
+            <div class="flag"><div class="fn"><div class="t">Grounding / citation check</div><div class="d">require retrieval grounding for factual answers</div></div><div class="toggle on"></div></div>
+            <div class="flag"><div class="fn"><div class="t">Content safety</div><div class="d">standard safety categories</div></div><div class="toggle on"></div></div>
+          </div>
+        </div>
+        <div class="card col6">
+          <div class="card-h"><div><h3>Feature Flags</h3><div class="sub">platform behaviour toggles</div></div></div>
+          <div class="flags">
+            <div class="flag"><div class="fn"><div class="t">Auto-publish creative</div><div class="d">ship without human approval (off for SEBI)</div></div><div class="toggle"></div></div>
+            <div class="flag"><div class="fn"><div class="t">Agent autonomy</div><div class="d">allow AUTO-tier agents to act</div></div><div class="toggle on"></div></div>
+            <div class="flag"><div class="fn"><div class="t">Embedded workspace</div><div class="d">internal LLM workspace for the team</div></div><div class="toggle on"></div></div>
+            <div class="flag"><div class="fn"><div class="t">Client read-only view</div><div class="d">expose locked dashboard to Finnovate</div></div><div class="toggle on"></div></div>
+            <div class="flag"><div class="fn"><div class="t">Vector retrieval (RAG)</div><div class="d">ground workspace on tenant data</div></div><div class="toggle on"></div></div>
+          </div>
+        </div>
+        <div class="card col12" style="grid-column:span 12">
+          <div class="card-h"><div><h3>Integration Health</h3><div class="sub">MCP servers · per-tenant credentials via vault</div></div><span class="pill e">7 connected</span></div>
+          <table>
+            <thead><tr><th>MCP Server</th><th>Auth</th><th>Status</th><th class="r">Last sync</th><th class="r">Calls 24h</th><th class="r">Errors</th></tr></thead>
+            <tbody>
+              <tr><td class="name">Meta Ads</td><td>OAuth 2.1</td><td><span class="status on"><i></i>healthy</span></td><td class="r">2m ago</td><td class="r">3,412</td><td class="r">0</td></tr>
+              <tr><td class="name">Google Ads</td><td>OAuth 2.1</td><td><span class="status on"><i></i>healthy</span></td><td class="r">1m ago</td><td class="r">2,180</td><td class="r">0</td></tr>
+              <tr><td class="name">GA4</td><td>OAuth 2.1</td><td><span class="status on"><i></i>healthy</span></td><td class="r">4m ago</td><td class="r">1,024</td><td class="r">0</td></tr>
+              <tr><td class="name">WhatsApp / BSP</td><td>API key</td><td><span class="status rev"><i></i>degraded</span></td><td class="r">18m ago</td><td class="r">642</td><td class="r over">14</td></tr>
+              <tr><td class="name">Instantly</td><td>API key</td><td><span class="status on"><i></i>healthy</span></td><td class="r">3m ago</td><td class="r">918</td><td class="r">0</td></tr>
+              <tr><td class="name">Mailchimp</td><td>OAuth 2.1</td><td><span class="status on"><i></i>healthy</span></td><td class="r">6m ago</td><td class="r">204</td><td class="r">0</td></tr>
+              <tr><td class="name">n8n</td><td>token</td><td><span class="status off"><i></i>paused</span></td><td class="r">2h ago</td><td class="r">0</td><td class="r">0</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- PLACEHOLDER PAGES -->
+    <div class="content page hidden" data-page="campaigns"><div class="phead"><div><h1>Campaigns</h1><p>List + detail of every campaign across Meta &amp; Google</p></div></div><div class="card"><div class="empty"><div class="ec"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg></div><h3>Campaigns view</h3><p>Full campaign list, status pills, budget pacing, and drill-down into ad groups + creatives. Built in the implementation plan — this nav slot is wired and ready.</p></div></div></div>
+    <div class="content page hidden" data-page="studio"><div class="phead"><div><h1>Creative Studio</h1><p>Brief → generate → review → ship</p></div></div><div class="card"><div class="empty"><div class="ec"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg></div><h3>Creative Studio</h3><p>Brief form → image/video/copy generation → variants gallery → SEBI compliance gate → ship. Wired and ready for the build.</p></div></div></div>
+    <div class="content page hidden" data-page="workspace"><div class="phead"><div><h1>Workspace</h1><p>Embedded LLM workspace — your internal ChatGPT/Claude</p></div></div><div class="card"><div class="empty"><div class="ec"><svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div><h3>LLM Workspace</h3><p>Model-select chat routed via the Gateway, grounded retrieval with citations, prompt library, file upload. This is where Cognivo's airy chat style will shine.</p></div></div></div>
+    <div class="content page hidden" data-page="integrations"><div class="phead"><div><h1>Integrations</h1><p>Connect &amp; manage marketing platforms via MCP</p></div></div><div class="card"><div class="empty"><div class="ec"><svg viewBox="0 0 24 24"><path d="M6 3v6a6 6 0 0 0 12 0V3"/><path d="M6 21v-4M18 21v-4"/></svg></div><h3>Integrations</h3><p>Connect Meta, Google, GA4, WhatsApp, Instantly, Mailchimp, n8n via OAuth 2.1 — health, scopes, per-tenant credentials. (Live status is on System Config.)</p></div></div></div>
+    <div class="content page hidden" data-page="approvals"><div class="phead"><div><h1>Approvals Inbox</h1><p>Human-in-the-loop — agents propose, you dispose</p></div></div><div class="card"><div class="empty"><div class="ec"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L20 6"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div><h3>Approvals Inbox</h3><p>Every action above a tenant's autonomy threshold lands here: budget shifts, creative ships, suppression lists — approve, edit, or reject, then the agent resumes from checkpoint.</p></div></div></div>
+  </div>
+</div>
+<script>
+function toggleTheme(){var h=document.documentElement;h.dataset.theme=h.dataset.theme==='dark'?'light':'dark';}
+document.querySelectorAll('.nav a').forEach(function(a){
+  a.addEventListener('click',function(){
+    var p=a.getAttribute('data-page');
+    document.querySelectorAll('.nav a').forEach(function(x){x.classList.remove('active')});
+    a.classList.add('active');
+    document.querySelectorAll('.page').forEach(function(pg){pg.classList.toggle('hidden',pg.getAttribute('data-page')!==p)});
+    window.scrollTo(0,0);
+  });
+});
+(function(){
+  var el=document.getElementById('heat');if(!el)return;
+  var days=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  var cols=['12a','2a','4a','6a','8a','10a','12p','2p','4p','6p','8p','10p'];
+  var html='<div></div>';
+  cols.forEach(function(c){html+='<div class="hh">'+c+'</div>';});
+  var seed=[[1,1,0,1,2,3,4,3,4,5,6,4],[1,0,1,2,3,4,5,4,5,6,8,5],[0,1,1,2,3,4,4,5,4,6,7,4],[1,1,2,2,3,3,5,4,5,6,6,5],[2,1,1,3,4,4,5,6,5,6,7,6],[3,2,2,3,3,4,4,3,4,5,5,4],[2,2,1,2,3,3,4,3,4,4,4,3]];
+  var scale=['rgba(148,163,184,.10)','rgba(139,92,246,.22)','rgba(139,92,246,.4)','rgba(99,102,241,.5)','rgba(56,189,248,.55)','rgba(52,211,153,.6)','rgba(52,211,153,.8)','#34d399','#34d399'];
+  days.forEach(function(d,i){html+='<div class="hr">'+d+'</div>';seed[i].forEach(function(v){html+='<div class="hc" style="background:'+scale[v]+'"></div>';});});
+  el.innerHTML=html;
+})();
+</script>
+</body>
+</html>
