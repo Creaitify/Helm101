@@ -6,6 +6,7 @@ const delay = <V>(v: V): Promise<V> => Promise.resolve(v) // seam: swap for fetc
 export const getTenant = () => delay<T.Tenant>(fx.tenant)
 export const getKpis = () => delay<T.KpiMetric[]>(fx.kpis)
 export const getMetricStrip = () => delay<T.MetricCell[]>(fx.metricStrip)
+export const getAnalyticsPanels = () => delay<T.AnalyticsPanels>(fx.analyticsPanels)
 export const getFunnel = () => delay<T.FunnelStage[]>(fx.funnel)
 export const getChannels = () => delay<T.ChannelRow[]>(fx.channels)
 export const getCampaigns = () => delay<T.CampaignRow[]>(fx.campaigns)

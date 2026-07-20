@@ -10,6 +10,7 @@ export function StudioView({ brief }: { brief: Brief }) {
   const [phase, setPhase] = useState<'idle' | 'generating' | 'done'>('idle')
   const [variants, setVariants] = useState<Variant[]>([])
   const [shipped, setShipped] = useState<Variant[]>([])
+  const [acknowledged, setAcknowledged] = useState<Set<string>>(() => new Set())
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current) }, [])
 
@@ -20,6 +21,7 @@ export function StudioView({ brief }: { brief: Brief }) {
   function ship(v: Variant) {
     setShipped((s) => [...s, v]); setVariants((vs) => vs.filter((x) => x.id !== v.id))
   }
+  function acknowledge(id: string) { setAcknowledged((ids) => new Set(ids).add(id)) }
 
   return (
     <div className="content">
@@ -49,7 +51,10 @@ export function StudioView({ brief }: { brief: Brief }) {
                       : <div className="var-copy">{v.body}</div>}
                     <div className="var-foot">
                       <span className={`gate ${v.compliance}`}>{v.compliance === 'pass' ? 'SEBI pass' : `SEBI flag`}</span>
-                      <Button onClick={() => ship(v)} {...(v.compliance === 'flag' ? { disabled: true } : {})}>Ship</Button>
+                      <div className="var-actions">
+                        {v.compliance === 'flag' && !acknowledged.has(v.id) && <Button onClick={() => acknowledge(v.id)}>Acknowledge risk</Button>}
+                        <Button onClick={() => ship(v)} disabled={v.compliance === 'flag' && !acknowledged.has(v.id)}>Ship</Button>
+                      </div>
                     </div>
                     {v.flagReason && <div className="var-flag">{v.flagReason}</div>}
                   </div>

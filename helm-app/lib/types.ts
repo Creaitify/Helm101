@@ -21,6 +21,10 @@ export interface PermissionRow { capability: string; roles: Record<Role, 'yes' |
 export interface IntegrationRow { name: string; auth: string; status: 'healthy' | 'degraded' | 'paused'; lastSync: string; calls: string; errors: number }
 export interface ActivityEvent { agent: string; title: string; sub: string; dot: SeriesColor; latency: string; tokens: string; tag?: 'ERR' | 'REVIEW' }
 export interface Flag { title: string; desc: string; on: boolean }
+export interface GoalGauge { pct: number; color: SeriesColor; label: string }
+export interface CreativeLeaderboardRow { code: string; grad: string; title: string; sub: string; pct: number; stat: string }
+export interface AnalyticsApprovalRow { code: string; color: string; title: string; sub: string }
+export interface AnalyticsPanels { heatmapRows: number[][]; goalGauges: GoalGauge[]; leaderboard: CreativeLeaderboardRow[]; approvalsPreview: AnalyticsApprovalRow[] }
 
 export interface CampaignFull {
   id: string; name: string; channel: string; channelColor: SeriesColor

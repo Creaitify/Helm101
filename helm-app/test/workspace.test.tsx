@@ -25,4 +25,9 @@ describe('workspace', () => {
     expect(screen.getByText('How is CAC trending?')).toBeInTheDocument()
     expect(await screen.findByText(/HELM/i, {}, { timeout: 3000 })).toBeInTheDocument()
   })
+  it('shows a selected file as an attachment chip', async () => {
+    render(<WorkspaceView templates={promptTemplates} />)
+    await userEvent.upload(screen.getByLabelText(/attach file/i), new File(['brief'], 'brief.pdf', { type: 'application/pdf' }))
+    expect(screen.getByText(/attached: brief.pdf/i)).toBeInTheDocument()
+  })
 })

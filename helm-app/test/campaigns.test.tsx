@@ -19,4 +19,10 @@ describe('CampaignsView', () => {
     expect(await screen.findByText(/Ad groups/i)).toBeInTheDocument()
     expect(screen.getByText(/Lowest CAC/i)).toBeInTheDocument()
   })
+  it('sorts rows when a column header is selected', async () => {
+    render(<CampaignsView campaigns={campaignsFull} />)
+    await userEvent.click(screen.getByRole('button', { name: /sort by cac/i }))
+    const rows = screen.getAllByRole('row').slice(1)
+    expect(rows[0]).toHaveTextContent('Search · Brand')
+  })
 })

@@ -35,7 +35,7 @@ const ICONS = {
   Settings,
 }
 
-export function Sidebar({ role }: { role: Role }) {
+export function Sidebar({ role, open = false, onNavigate = () => {} }: { role: Role; open?: boolean; onNavigate?: () => void }) {
   const pathname = usePathname()
   const { tenant } = useTenant()
   const { pending } = useApprovals()
@@ -44,7 +44,7 @@ export function Sidebar({ role }: { role: Role }) {
   const master = visible.filter((it) => it.section === 'master')
 
   return (
-    <aside className="side">
+    <aside className={`side${open ? ' open' : ''}`}>
       <div className="brand">
         <span className="mark">H</span>
         <div>
@@ -72,7 +72,7 @@ export function Sidebar({ role }: { role: Role }) {
           const href = '/' + it.page
           const badge = it.page === 'approvals' ? pending : it.badge
           return (
-            <Link key={it.page} href={href} className={pathname === href ? 'active' : undefined}>
+            <Link key={it.page} href={href} onClick={onNavigate} className={pathname === href ? 'active' : undefined}>
               <Icon />
               {it.label}
               {badge ? <span className="badge">{badge}</span> : null}
@@ -89,7 +89,7 @@ export function Sidebar({ role }: { role: Role }) {
               const Icon = ICONS[it.icon as keyof typeof ICONS]
               const href = '/' + it.page
               return (
-                <Link key={it.page} href={href} className={pathname === href ? 'active' : undefined}>
+                <Link key={it.page} href={href} onClick={onNavigate} className={pathname === href ? 'active' : undefined}>
                   <Icon />
                   {it.label}
                   {it.badge != null && <span className="badge">{it.badge}</span>}

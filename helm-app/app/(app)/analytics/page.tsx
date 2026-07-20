@@ -8,43 +8,16 @@ import { FunnelChart } from '@/components/viz/FunnelChart'
 import { SplitBar } from '@/components/viz/SplitBar'
 import { RadialGauge } from '@/components/viz/RadialGauge'
 import { Heatmap } from '@/components/viz/Heatmap'
-import { getKpis, getMetricStrip, getFunnel, getChannels, getActivity } from '@/lib/data'
-
-const HEATMAP_ROWS = [
-  [1, 1, 0, 1, 2, 3, 4, 3, 4, 5, 6, 4],
-  [1, 0, 1, 2, 3, 4, 5, 4, 5, 6, 8, 5],
-  [0, 1, 1, 2, 3, 4, 4, 5, 4, 6, 7, 4],
-  [1, 1, 2, 2, 3, 3, 5, 4, 5, 6, 6, 5],
-  [2, 1, 1, 3, 4, 4, 5, 6, 5, 6, 7, 6],
-  [3, 2, 2, 3, 3, 4, 4, 3, 4, 5, 5, 4],
-  [2, 2, 1, 2, 3, 3, 4, 3, 4, 4, 4, 3],
-]
-
-const GOAL_GAUGES = [
-  { pct: 81, color: 'emerald', label: 'CAC' },
-  { pct: 92, color: 'violet', label: 'Volume' },
-  { pct: 55, color: 'amber', label: 'Advisory' },
-] as const
-
-const LEADERBOARD = [
-  { code: 'V-07', grad: 'linear-gradient(135deg,var(--violet),var(--indigo))', title: '"Retire at 50" · Reel', sub: 'Meta · video · 18s', pct: 94, stat: '₹298' },
-  { code: 'V-12', grad: 'linear-gradient(135deg,var(--sky),var(--emerald))', title: '"₹999 = clarity" · Static', sub: 'Meta · image · 1:1', pct: 82, stat: '₹341' },
-  { code: 'V-04', grad: 'linear-gradient(135deg,var(--amber),var(--rose))', title: '"Tax season" · Carousel', sub: 'Google · image', pct: 64, stat: '₹455' },
-]
-
-const APPROVALS = [
-  { code: 'MB', color: 'var(--amber)', title: '+₹15K to Lookalike 2%', sub: 'Media Buyer · propose' },
-  { code: 'CR', color: 'var(--violet)', title: 'Ship 4 new reels', sub: 'Creative · propose' },
-  { code: 'AU', color: 'var(--sky)', title: 'New suppression list', sub: 'Audience · propose' },
-]
+import { getKpis, getMetricStrip, getFunnel, getChannels, getActivity, getAnalyticsPanels } from '@/lib/data'
 
 export default async function AnalyticsPage() {
-  const [kpis, metricStrip, funnel, channels, activity] = await Promise.all([
+  const [kpis, metricStrip, funnel, channels, activity, panels] = await Promise.all([
     getKpis(),
     getMetricStrip(),
     getFunnel(),
     getChannels(),
     getActivity(),
+    getAnalyticsPanels(),
   ])
 
   const channelSpendTotal = channels.reduce((sum, c) => sum + c.spend, 0)
@@ -146,7 +119,7 @@ export default async function AnalyticsPage() {
             </div>
           </div>
           <div className="gauges">
-            {GOAL_GAUGES.map((gauge) => (
+            {panels.goalGauges.map((gauge) => (
               <RadialGauge key={gauge.label} pct={gauge.pct} color={gauge.color} label={gauge.label} />
             ))}
           </div>
@@ -160,7 +133,7 @@ export default async function AnalyticsPage() {
             </div>
             <span className="pill e">peak Tue 8pm</span>
           </div>
-          <Heatmap rows={HEATMAP_ROWS} />
+          <Heatmap rows={panels.heatmapRows} />
         </Card>
 
         <Card className="col4">
@@ -171,7 +144,7 @@ export default async function AnalyticsPage() {
             </div>
           </div>
           <div className="lead">
-            {LEADERBOARD.map((row) => (
+            {panels.leaderboard.map((row) => (
               <div className="lrow" key={row.code}>
                 <div className="lthumb" style={{ background: row.grad }}>
                   {row.code}
@@ -201,7 +174,7 @@ export default async function AnalyticsPage() {
             <span className="pill r">3</span>
           </div>
           <div className="lead">
-            {APPROVALS.map((row) => (
+            {panels.approvalsPreview.map((row) => (
               <div className="lrow" key={row.code}>
                 <div className="lthumb" style={{ background: row.color, width: 32, height: 32 }}>
                   {row.code}

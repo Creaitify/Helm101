@@ -15,6 +15,8 @@ export function ApprovalsView({ items }: { items: ApprovalItem[] }) {
   const [tab, setTab] = useState('pending')
   const [pending, setList] = useState<ApprovalItem[]>(items)
   const [decided, setDecided] = useState<Decided[]>([])
+  const [editing, setEditing] = useState<ApprovalItem | null>(null)
+  const [draftPayload, setDraftPayload] = useState('')
 
   useEffect(() => { setPending(pending.length) }, [pending.length, setPending])
 
@@ -22,6 +24,14 @@ export function ApprovalsView({ items }: { items: ApprovalItem[] }) {
     setList((xs) => xs.filter((x) => x.id !== item.id))
     setDecided((d) => [{ item, outcome }, ...d])
     toast(`${item.action} ${outcome}`)
+  }
+  function beginEdit(item: ApprovalItem) { setEditing(item); setDraftPayload(item.payload) }
+  function saveEdit() {
+    if (!editing) return
+    const updated = { ...editing, payload: draftPayload }
+    setList((current) => current.map((item) => item.id === updated.id ? updated : item))
+    setEditing(null)
+    toast('Proposal updated; review and approve when ready')
   }
 
   return (
@@ -41,7 +51,7 @@ export function ApprovalsView({ items }: { items: ApprovalItem[] }) {
               <div className="appr-checks">{it.checks.map((c, i) => <span key={i} className={`chk-pill ${c.status}`}>{c.label}</span>)}</div>
               <div className="appr-actions">
                 <Button variant="primary" onClick={() => decide(it, 'approved')}>Approve</Button>
-                <Button onClick={() => decide(it, 'approved')}>Edit</Button>
+                <Button onClick={() => beginEdit(it)}>Edit</Button>
                 <Button onClick={() => decide(it, 'rejected')}>Reject</Button>
               </div>
             </Card>
@@ -61,6 +71,11 @@ export function ApprovalsView({ items }: { items: ApprovalItem[] }) {
           ))}
         </div>
       )}
+      {editing && <div className="edit-backdrop"><div role="dialog" aria-label={`Edit ${editing.action}`}><Card className="edit-panel">
+        <div className="card-h"><div><h3>Edit proposal</h3><div className="sub">Review the payload before approval.</div></div></div>
+        <label className="field"><span>Payload</span><textarea value={draftPayload} onChange={(event) => setDraftPayload(event.target.value)} /></label>
+        <div className="appr-actions"><Button variant="primary" onClick={saveEdit}>Save changes</Button><Button onClick={() => setEditing(null)}>Cancel</Button></div>
+      </Card></div></div>}
     </div>
   )
 }

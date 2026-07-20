@@ -1,4 +1,15 @@
-export function TrendChart() {
+export function TrendChart({ series, label = 'Trend' }: { series?: number[]; label?: string }) {
+  if (series && series.length > 1) {
+    const min = Math.min(...series)
+    const max = Math.max(...series)
+    const span = max - min || 1
+    const point = (value: number, index: number) => `${20 + (index * 720) / (series.length - 1)},${220 - ((value - min) / span) * 160}`
+    return <svg viewBox="0 0 760 250" width="100%" height="240" role="img" aria-label={`${label} trend`} preserveAspectRatio="none">
+      <g stroke="var(--line)" strokeWidth="1">{[50, 110, 170, 230].map((y) => <line key={y} x1="0" y1={y} x2="760" y2={y} />)}</g>
+      <polyline fill="none" stroke="var(--violet-2)" strokeWidth="3" points={series.map(point).join(' ')} />
+      {series.map((value, index) => <circle key={`${value}-${index}`} cx={20 + (index * 720) / (series.length - 1)} cy={220 - ((value - min) / span) * 160} r="3" fill="var(--emerald)" />)}
+    </svg>
+  }
   return (
     <svg viewBox="0 0 760 250" width="100%" height="240" preserveAspectRatio="none">
       <g stroke="var(--line)" strokeWidth="1">

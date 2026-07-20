@@ -15,6 +15,7 @@ import type {
   IntegrationRow,
   ActivityEvent,
   Flag,
+  AnalyticsPanels,
   CampaignFull,
   AdGroup,
   CreativeAsset,
@@ -87,6 +88,13 @@ export const metricStrip: MetricCell[] = [
   { label: 'Advisory', value: '143', deltaLabel: '▲ 21%', direction: 'up' },
   { label: 'SEBI Blocks', value: '2', deltaLabel: 'wk', direction: 'flat' },
 ]
+
+export const analyticsPanels: AnalyticsPanels = {
+  heatmapRows: [[1, 1, 0, 1, 2, 3, 4, 3, 4, 5, 6, 4], [1, 0, 1, 2, 3, 4, 5, 4, 5, 6, 8, 5], [0, 1, 1, 2, 3, 4, 4, 5, 4, 6, 7, 4], [1, 1, 2, 2, 3, 3, 5, 4, 5, 6, 6, 5], [2, 1, 1, 3, 4, 4, 5, 6, 5, 6, 7, 6], [3, 2, 2, 3, 3, 4, 4, 3, 4, 5, 5, 4], [2, 2, 1, 2, 3, 3, 4, 3, 4, 4, 4, 3]],
+  goalGauges: [{ pct: 81, color: 'emerald', label: 'CAC' }, { pct: 92, color: 'violet', label: 'Volume' }, { pct: 55, color: 'amber', label: 'Advisory' }],
+  leaderboard: [{ code: 'V-07', grad: 'linear-gradient(135deg,var(--violet),var(--indigo))', title: '"Retire at 50" · Reel', sub: 'Meta · video · 18s', pct: 94, stat: '₹298' }, { code: 'V-12', grad: 'linear-gradient(135deg,var(--sky),var(--emerald))', title: '"₹999 = clarity" · Static', sub: 'Meta · image · 1:1', pct: 82, stat: '₹341' }, { code: 'V-04', grad: 'linear-gradient(135deg,var(--amber),var(--rose))', title: '"Tax season" · Carousel', sub: 'Google · image', pct: 64, stat: '₹455' }],
+  approvalsPreview: [{ code: 'MB', color: 'var(--amber)', title: '+₹15K to Lookalike 2%', sub: 'Media Buyer · propose' }, { code: 'CR', color: 'var(--violet)', title: 'Ship 4 new reels', sub: 'Creative · propose' }, { code: 'AU', color: 'var(--sky)', title: 'New suppression list', sub: 'Audience · propose' }],
+}
 
 // Reconciliation invariant: channels[].checkups must sum to the Checkups stage value (1204).
 // Meta 612 + Google 401 + WhatsApp 128 + Email 63 = 1204.

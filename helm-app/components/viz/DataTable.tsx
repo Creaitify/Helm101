@@ -1,19 +1,19 @@
 import type { ReactNode } from 'react'
 
-export interface DataTableColumn {
-  key: string
+export interface DataTableColumn<T extends object> {
+  key: keyof T
   label: string
   align?: 'r'
-  render?: (row: any) => ReactNode
+  render?: (row: T) => ReactNode
 }
 
-export function DataTable({ columns, rows }: { columns: DataTableColumn[]; rows: any[] }) {
+export function DataTable<T extends object>({ columns, rows }: { columns: DataTableColumn<T>[]; rows: T[] }) {
   return (
     <table>
       <thead>
         <tr>
           {columns.map((col) => (
-            <th key={col.key} className={col.align === 'r' ? 'r' : undefined}>
+            <th key={String(col.key)} className={col.align === 'r' ? 'r' : undefined}>
               {col.label}
             </th>
           ))}
@@ -23,8 +23,8 @@ export function DataTable({ columns, rows }: { columns: DataTableColumn[]; rows:
         {rows.map((row, i) => (
           <tr key={i}>
             {columns.map((col) => (
-              <td key={col.key} className={col.align === 'r' ? 'r' : undefined}>
-                {col.render ? col.render(row) : row[col.key]}
+              <td key={String(col.key)} className={col.align === 'r' ? 'r' : undefined}>
+                {col.render ? col.render(row) : String(row[col.key] ?? '')}
               </td>
             ))}
           </tr>

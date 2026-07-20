@@ -1,12 +1,13 @@
 'use client'
-import { Search, Bell, Moon, Plus } from 'lucide-react'
+import { Search, Bell, Moon, Plus, Menu } from 'lucide-react'
 import { useTheme } from '@/lib/theme'
 import { Button } from '@/components/ui/Button'
 
-export function TopBar() {
+export function TopBar({ onMenu = () => {} }: { onMenu?: () => void }) {
   const { toggle } = useTheme()
   return (
     <header className="top">
+      <button className="ibtn menu-btn" aria-label="Open navigation" onClick={onMenu}><Menu /></button>
       <div className="search">
         <Search width={14} height={14} />
         Search campaigns, agents, creatives, leads…

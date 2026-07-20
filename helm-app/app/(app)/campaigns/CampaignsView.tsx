@@ -15,11 +15,25 @@ export function CampaignsView({ campaigns }: { campaigns: CampaignFull[] }) {
   const [status, setStatus] = useState('all')
   const [detail, setDetail] = useState<CampaignDetail | null>(null)
   const [open, setOpen] = useState(false)
+  const [sort, setSort] = useState<{ key: 'name' | 'channel' | 'status' | 'spend' | 'pacingPct' | 'cac' | 'roas'; direction: 'asc' | 'desc' }>({ key: 'spend', direction: 'desc' })
 
-  const rows = useMemo(() => campaigns.filter((c) =>
-    (status === 'all' || c.status === status) &&
-    c.name.toLowerCase().includes(q.toLowerCase())
-  ), [campaigns, q, status])
+  const rows = useMemo(() => [...campaigns.filter((c) =>
+    (status === 'all' || c.status === status) && c.name.toLowerCase().includes(q.toLowerCase())
+  )].sort((a, b) => {
+    const left = a[sort.key] ?? Number.POSITIVE_INFINITY
+    const right = b[sort.key] ?? Number.POSITIVE_INFINITY
+    const compared = typeof left === 'string' && typeof right === 'string' ? left.localeCompare(right) : Number(left) - Number(right)
+    return sort.direction === 'asc' ? compared : -compared
+  }), [campaigns, q, status, sort])
+
+  function toggleSort(key: typeof sort.key) {
+    setSort((current) => current.key === key ? { key, direction: current.direction === 'asc' ? 'desc' : 'asc' } : { key, direction: 'asc' })
+  }
+
+  function sortable(label: string, key: typeof sort.key) {
+    const active = sort.key === key
+    return <button type="button" className="sort-head" onClick={() => toggleSort(key)} aria-label={`Sort by ${label}`}>{label}{active ? (sort.direction === 'asc' ? ' ↑' : ' ↓') : ''}</button>
+  }
 
   async function openDetail(id: string) {
     setDetail(await getCampaignDetail(id))
@@ -42,7 +56,7 @@ export function CampaignsView({ campaigns }: { campaigns: CampaignFull[] }) {
         </FilterBar>
         <table>
           <thead><tr>
-            <th>Campaign</th><th>Channel</th><th>Status</th><th className="r">Spend</th><th>Pacing</th><th className="r">CAC</th><th className="r">ROAS</th>
+            <th>{sortable('Campaign', 'name')}</th><th>{sortable('Channel', 'channel')}</th><th>{sortable('Status', 'status')}</th><th className="r">{sortable('Spend', 'spend')}</th><th>{sortable('Pacing', 'pacingPct')}</th><th className="r">{sortable('CAC', 'cac')}</th><th className="r">{sortable('ROAS', 'roas')}</th>
           </tr></thead>
           <tbody>
             {rows.map((c) => (
@@ -76,7 +90,7 @@ export function CampaignsView({ campaigns }: { campaigns: CampaignFull[] }) {
               <div><span className="k">Started</span><span className="v">{detail.campaign.startedAt}</span></div>
               <div><span className="k">CAC</span><span className="v">{detail.campaign.cac == null ? '—' : inr(detail.campaign.cac)}</span></div>
             </div>
-            <Card><div className="card-h"><div><h3>Daily results</h3><div className="sub">last 14 days</div></div></div><TrendChart /></Card>
+            <Card><div className="card-h"><div><h3>Daily results</h3><div className="sub">last 14 days</div></div></div><TrendChart series={detail.series} label="Results" /></Card>
             <Card>
               <div className="card-h"><div><h3>Ad groups</h3></div></div>
               <table><thead><tr><th>Name</th><th>Status</th><th className="r">Spend</th><th className="r">Results</th></tr></thead>
