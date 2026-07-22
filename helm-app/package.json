@@ -8,6 +8,7 @@
     "start": "next start",
     "db:check": "node -e \"fetch('http://localhost:3000/api/health').then(async r => { console.log(r.status, await r.text()) })\"",
     "db:migrate": "node scripts/migrate.mjs",
+    "db:provision-app-role": "node scripts/provision-app-role.mjs",
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest"
