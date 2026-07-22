@@ -1952,7 +1952,25 @@ describe('data layer cutover', () => {
     expect(typeof data.getCurrentTenantValue).toBe('function')
   })
 })
+
+describe('fallback classification', () => {
+  it('treats missing config and unauthenticated callers as expected', async () => {
+    const { isExpectedFallback } = await import('@/lib/data')
+    expect(isExpectedFallback(new Error('Missing required server environment variable: databaseUrl'))).toBe(true)
+    expect(isExpectedFallback(new Error('connect ECONNREFUSED 127.0.0.1:5432'))).toBe(true)
+    class UnauthenticatedError extends Error {}
+    expect(isExpectedFallback(new UnauthenticatedError('nope'))).toBe(true)
+  })
+
+  it('does NOT swallow a genuine query bug', async () => {
+    const { isExpectedFallback } = await import('@/lib/data')
+    expect(isExpectedFallback(new Error('column "spend_minor" does not exist'))).toBe(false)
+    expect(isExpectedFallback(new Error('syntax error at or near "slect"'))).toBe(false)
+  })
+})
 ```
+
+`isExpectedFallback` must be exported from `lib/data/index.ts` so this test can reach it.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -1971,9 +1989,24 @@ import type { TenantValue } from '../tenant'
 const delay = <V>(v: V): Promise<V> => Promise.resolve(v)
 
 /**
+ * True for the two conditions that legitimately mean "no database here":
+ * an unconfigured/unreachable Neon connection, and an unauthenticated or
+ * unprovisioned caller. Anything else is a real bug and must stay visible.
+ */
+export function isExpectedFallback(error: unknown): boolean {
+  const name = error instanceof Error ? error.constructor.name : ''
+  if (name === 'UnauthenticatedError' || name === 'NoMembershipError') return true
+  const message = error instanceof Error ? error.message : ''
+  return /Missing required server environment variable|ECONNREFUSED|ENOTFOUND|password authentication failed/i.test(message)
+}
+
+/**
  * Runs a repository read under tenant RLS, falling back to fixtures when no
- * database is configured. The fallback is what keeps tests and local
- * development working without Neon.
+ * database is configured or the caller has no session. The fallback is what
+ * keeps tests and local development working without Neon.
+ *
+ * A genuine query bug must never be silently indistinguishable from "no
+ * database": unexpected errors are logged, and in production they throw.
  */
 async function read<V>(work: (tx: import('../server/tenant-context').TenantQueryTransaction) => Promise<V>, fallback: V): Promise<V> {
   if (!process.env.NEON_DATABASE_URL) return fallback
@@ -1982,7 +2015,10 @@ async function read<V>(work: (tx: import('../server/tenant-context').TenantQuery
     const { withTenantContext } = await import('../server/db')
     const context = await requireTenantContext()
     return await withTenantContext(context, work)
-  } catch {
+  } catch (error) {
+    if (isExpectedFallback(error)) return fallback
+    console.error('[data] repository read failed, serving fixtures', error)
+    if (process.env.HELM_ENV === 'production') throw error
     return fallback
   }
 }
@@ -2050,7 +2086,10 @@ export const getCurrentTenantValue = async (): Promise<TenantValue | undefined> 
       const tenant = (await getTenantById(tx, context.tenantId)) ?? fx.tenant
       return { tenant, role: toUiRole(context.role) }
     })
-  } catch {
+  } catch (error) {
+    if (isExpectedFallback(error)) return undefined
+    console.error('[data] tenant value read failed', error)
+    if (process.env.HELM_ENV === 'production') throw error
     return undefined
   }
 }
