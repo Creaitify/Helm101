@@ -12,11 +12,16 @@
 -- guarantee of it, and no documentation saying migrations must always be
 -- applied by that specific role for future tables to be covered.
 --
--- `alter default privileges` is idempotent and additive: re-running it with
--- an explicit `for role neondb_owner` replaces the earlier (accidentally
--- role-scoped-the-same-way) rule with an equivalent one that is now
--- guaranteed correct, rather than correct-by-coincidence, and documents the
--- constraint that migrations must be applied by `neondb_owner`.
+-- `alter default privileges` is idempotent and additive, and does NOT
+-- replace an earlier rule: as actually applied, 0004/0005 ran via
+-- `NEON_DATABASE_URL_UNPOOLED`, whose executing role was already
+-- `neondb_owner`, so the rule they installed was already scoped to
+-- `neondb_owner` -- just implicitly, by which role happened to run the
+-- migration, rather than explicitly. This migration is therefore an
+-- effective no-op against the existing rule; its purpose is to make that
+-- scoping explicit in the SQL text and documented as a requirement, so it is
+-- guaranteed correct going forward rather than correct only by coincidence
+-- of which role runs `db:migrate`.
 --
 -- This migration does not change any existing grant on existing tables --
 -- 0004 and 0005 already ran `grant select ... on all tables in schema

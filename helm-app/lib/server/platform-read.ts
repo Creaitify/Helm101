@@ -12,31 +12,152 @@ import { requireServerEnv } from './env'
 // that second statement's verb is.
 const WRITE_VERBS = /\b(insert|update|delete|drop|alter|truncate|grant|revoke|create)\b/i
 
+function isDollarTagChar(ch: string): boolean {
+  return /[A-Za-z0-9_]/.test(ch)
+}
+
 /**
- * Scans for a `;` that is not inside a single-quoted string literal,
- * tracking `''`-escaped quotes. A single trailing `;` (optionally followed
- * only by whitespace) at the very end of the already-trimmed statement is
- * allowed; anything else outside a literal is rejected.
+ * Scans for a `;` that is not inside Postgres lexical structure that can
+ * legitimately contain one: `'...'` string literals (`''` escapes), `E'...'`
+ * / `e'...'` escape-strings (`\'` also escapes, in addition to `''`), `"..."`
+ * quoted identifiers (`""` escapes), `$tag$...$tag$` dollar-quoted bodies
+ * (tag may be empty), `-- ...` line comments (terminated by newline), and
+ * `/* ... *\/` block comments, which Postgres nests. A single trailing `;`
+ * (optionally followed only by whitespace) at the very end of the
+ * already-trimmed statement is allowed; any other `;` found outside all of
+ * the above is rejected as a structural (stacked-statement) semicolon.
+ *
+ * This must track Postgres lexical structure precisely: an apostrophe inside
+ * a `--` or `/* *\/` comment (e.g. ordinary English like "don't") must NOT be
+ * treated as opening a string literal, or the scanner desyncs for the rest
+ * of the statement and a following real `;` is missed entirely.
  */
 function hasStructuralSemicolon(normalized: string): boolean {
-  let inString = false
-  for (let i = 0; i < normalized.length; i++) {
+  const n = normalized.length
+  let i = 0
+  let blockCommentDepth = 0
+
+  while (i < n) {
     const ch = normalized[i]
-    if (ch === "'") {
-      if (inString && normalized[i + 1] === "'") {
-        i++ // escaped quote ('') — stay inside the literal, skip both chars
+
+    // Block comments nest in Postgres; track depth so an inner */ doesn't
+    // prematurely close an outer comment.
+    if (blockCommentDepth > 0) {
+      if (ch === '/' && normalized[i + 1] === '*') {
+        blockCommentDepth++
+        i += 2
         continue
       }
-      inString = !inString
+      if (ch === '*' && normalized[i + 1] === '/') {
+        blockCommentDepth--
+        i += 2
+        continue
+      }
+      i++
       continue
     }
-    if (ch === ';' && !inString) {
+    if (ch === '/' && normalized[i + 1] === '*') {
+      blockCommentDepth = 1
+      i += 2
+      continue
+    }
+
+    // Line comment: everything to end of line is inert, including any ' or ;.
+    if (ch === '-' && normalized[i + 1] === '-') {
+      i += 2
+      while (i < n && normalized[i] !== '\n') i++
+      continue
+    }
+
+    // E'...' / e'...' escape-string: both \' and '' escape the closing quote.
+    if ((ch === 'E' || ch === 'e') && normalized[i + 1] === "'") {
+      i += 2
+      while (i < n) {
+        if (normalized[i] === '\\' && i + 1 < n) {
+          i += 2
+          continue
+        }
+        if (normalized[i] === "'") {
+          if (normalized[i + 1] === "'") {
+            i += 2
+            continue
+          }
+          i++
+          break
+        }
+        i++
+      }
+      continue
+    }
+
+    // Plain '...' string literal, '' escaped quote.
+    if (ch === "'") {
+      i++
+      while (i < n) {
+        if (normalized[i] === "'") {
+          if (normalized[i + 1] === "'") {
+            i += 2
+            continue
+          }
+          i++
+          break
+        }
+        i++
+      }
+      continue
+    }
+
+    // "..." quoted identifier, "" escaped quote.
+    if (ch === '"') {
+      i++
+      while (i < n) {
+        if (normalized[i] === '"') {
+          if (normalized[i + 1] === '"') {
+            i += 2
+            continue
+          }
+          i++
+          break
+        }
+        i++
+      }
+      continue
+    }
+
+    // $tag$...$tag$ dollar-quoted body; tag may be empty ($$...$$).
+    if (ch === '$') {
+      let j = i + 1
+      let tag = ''
+      while (j < n && isDollarTagChar(normalized[j])) {
+        tag += normalized[j]
+        j++
+      }
+      if (normalized[j] === '$') {
+        const opener = '$' + tag + '$'
+        const closeIdx = normalized.indexOf(opener, j + 1)
+        if (closeIdx !== -1) {
+          i = closeIdx + opener.length
+          continue
+        }
+        // Unterminated dollar-quote: nothing after this can be structural
+        // (Postgres itself would reject this statement as malformed).
+        return false
+      }
+      // Bare `$` that isn't a dollar-quote opener (e.g. a parameter marker
+      // like $1) — not special, fall through.
+      i++
+      continue
+    }
+
+    if (ch === ';') {
       // Allowed only if this is the single trailing semicolon: nothing but
       // whitespace follows it to the end of the (already-trimmed) string.
       const rest = normalized.slice(i + 1)
       if (rest.trim() === '') return false
       return true
     }
+
+    i++
   }
   return false
 }
@@ -105,21 +226,35 @@ export async function withPlatformReadContext<T>(
       throw error
     }
   } finally {
-    client.release()
-    await pool.end()
-    // An audit-write failure must NEVER overwrite the outcome of the `try`
-    // above. Node replaces a try block's return value / thrown error with
-    // whatever a `finally` block throws, so an unguarded rejection here
-    // would (a) silently discard a successful read's result, and (b) mask
-    // the real error on the failure path with an unrelated audit error.
-    // Swallowing here is deliberately correct — do NOT "fix" this by letting
-    // the error propagate. Instead we log loudly so an audit outage is
-    // visible in server logs without ever taking down (or corrupting the
-    // result of) the read path it is meant to observe.
+    // NOTHING in this `finally` block may be allowed to throw. Node replaces
+    // a try block's return value / thrown error with whatever a `finally`
+    // block itself throws, so ANY unguarded rejection here — not just the
+    // audit write, but `client.release()` and `pool.end()` too, both of
+    // which are real network operations against Neon's serverless driver and
+    // can genuinely fail — would (a) silently discard a successful read's
+    // result, and (b) mask the real error on the failure path with an
+    // unrelated cleanup/audit error. Each of the three operations below is
+    // therefore individually guarded so a failure in one can never suppress
+    // another or the caller's outcome. The audit write is guaranteed to run
+    // FIRST (before release/end) so an invocation is audited even if cleanup
+    // subsequently fails — "every invocation writes an audit event" must
+    // hold even when the connection teardown itself throws. Do NOT "fix"
+    // this by removing a guard or reordering — that reintroduces the
+    // clobbering/unaudited-invocation bug this structure exists to prevent.
     try {
       await recordPlatformRead(actor.userId, statements)
     } catch (auditError) {
       console.error('platform-read audit write failed (read result/error is unaffected):', auditError)
+    }
+    try {
+      client.release()
+    } catch (releaseError) {
+      console.error('platform-read: client.release() failed:', releaseError)
+    }
+    try {
+      await pool.end()
+    } catch (endError) {
+      console.error('platform-read: pool.end() failed:', endError)
     }
   }
 }
@@ -147,7 +282,18 @@ async function recordPlatformRead(userId: string, statements: readonly string[])
     )
     await client.query('commit')
   } catch (error) {
-    await client.query('rollback')
+    // If `error` happened at/before `begin` (e.g. connection-level failure),
+    // the transaction may never have started, and issuing `rollback` here
+    // can itself throw. An unguarded throw from this catch block would
+    // replace `error` — the real cause — with that secondary rollback
+    // failure, so callers (and the finally-block audit-failure log in
+    // withPlatformReadContext) would see the wrong error. Swallow any
+    // rollback failure and always rethrow the ORIGINAL error.
+    try {
+      await client.query('rollback')
+    } catch {
+      // Intentionally ignored — see comment above.
+    }
     throw error
   } finally {
     client.release()

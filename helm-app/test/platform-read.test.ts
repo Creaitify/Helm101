@@ -98,6 +98,89 @@ describe('platform reader statement guard', () => {
       expect(() => assertReadOnlyStatement('select 1; select 2;')).toThrow(/read-only/i)
     })
   })
+
+  // Re-review CRITICAL B: the scanner previously modeled only '...' runs, so
+  // an apostrophe inside a comment (even ordinary English like "don't")
+  // flipped the quote-tracking state and desynchronized the rest of the
+  // scan, letting a real stacked-statement semicolon through uncaught. These
+  // cases pin the full case table from the re-review, including the two
+  // confirmed bypasses.
+  describe('structural semicolon rejection — comment-aware lexer (re-review CRITICAL B)', () => {
+    it('BLOCKS a semicolon hidden after an apostrophe inside a block comment', () => {
+      expect(() =>
+        assertReadOnlyStatement("select 1 /* it's */ ; vacuum full"),
+      ).toThrow(/read-only/i)
+    })
+
+    it('BLOCKS a semicolon hidden after an apostrophe inside a line comment', () => {
+      expect(() =>
+        assertReadOnlyStatement("select 1 -- don't\n; lock table users"),
+      ).toThrow(/read-only/i)
+    })
+
+    it('still BLOCKS select 1; set role neondb_owner', () => {
+      expect(() => assertReadOnlyStatement('select 1; set role neondb_owner')).toThrow(/read-only/i)
+    })
+
+    it('still BLOCKS a dollar-quoted literal followed by a stacked statement', () => {
+      expect(() => assertReadOnlyStatement('select $$x$$; vacuum full')).toThrow(/read-only/i)
+    })
+
+    it('still ALLOWS a semicolon inside an ordinary string literal', () => {
+      expect(() =>
+        assertReadOnlyStatement("select * from t where note = 'a;b'"),
+      ).not.toThrow()
+    })
+
+    it('still ALLOWS a single trailing semicolon', () => {
+      expect(() => assertReadOnlyStatement('select 1;')).not.toThrow()
+    })
+
+    it('ALLOWS a semicolon inside a nested block comment', () => {
+      expect(() =>
+        assertReadOnlyStatement('select /* outer /* inner ; comment */ still outer ; */ 1'),
+      ).not.toThrow()
+    })
+
+    it('BLOCKS a real stacked statement following a closed nested block comment', () => {
+      expect(() =>
+        assertReadOnlyStatement('select /* outer /* inner */ still outer */ 1; drop table x'),
+      ).toThrow(/read-only/i)
+    })
+
+    it('ALLOWS a semicolon inside a $tag$...$tag$ dollar-quoted body with a named tag', () => {
+      expect(() =>
+        assertReadOnlyStatement('select $tag$ some ; text $tag$ from x'),
+      ).not.toThrow()
+    })
+
+    it('BLOCKS a stacked statement following a closed named-tag dollar-quote', () => {
+      expect(() =>
+        assertReadOnlyStatement('select $tag$ text $tag$; drop table x'),
+      ).toThrow(/read-only/i)
+    })
+
+    it("ALLOWS an E'...' escape string using \\' escapes", () => {
+      expect(() => assertReadOnlyStatement("select E'it\\'s fine'")).not.toThrow()
+    })
+
+    it("BLOCKS a stacked statement following a closed E'...' escape string", () => {
+      expect(() => assertReadOnlyStatement("select E'\\'' ; drop table x")).toThrow(/read-only/i)
+    })
+
+    // A double-quoted identifier containing a semicolon is lexically a single
+    // statement in Postgres (the `;` is just a character inside the quoted
+    // identifier name, no different from a semicolon inside a string
+    // literal). This implementation therefore correctly ALLOWS it — there is
+    // no second statement being smuggled in, only an unusual identifier.
+    it('ALLOWS a double-quoted identifier containing a semicolon (single statement)', () => {
+      expect(() => assertReadOnlyStatement('select * from "a;b"')).not.toThrow()
+    })
+
+    it('BLOCKS a real stacked statement following a closed quoted identifier', () => {
+      expect(() => assertReadOnlyStatement('select * from "a;b"; drop table x')).toThrow(/read-only/i)
+    })
+  })
 })
 
 describe('assertReadOnlyStatement no longer blocks removed verbs', () => {
@@ -192,11 +275,22 @@ describe('withPlatformReadContext', () => {
     }
     poolFactories.push(() => ({ connect: vi.fn(async () => auditClient), query: vi.fn(), end: vi.fn(async () => {}) }))
 
+    const sentinelRow = { ok: true, sentinel: 'sentinel-row-42' }
+    readerClient.query.mockImplementation((async (text: string) => {
+      readerCalls.push({ text })
+      if (text.trim().toLowerCase() === 'select true as ok') {
+        return { rows: [sentinelRow] }
+      }
+      return { rows: [] }
+    }) as unknown as typeof readerClient.query)
+
     const result = await withPlatformReadContext({ userId: 'user-1' }, async (read) => {
-      return read.query<{ ok: boolean }>('select true as ok')
+      return read.query<{ ok: boolean; sentinel: string }>('select true as ok')
     })
 
-    expect(result).toEqual([])
+    // MINOR G: assert the sentinel row round-trips through `work`, not just
+    // that an empty array (a broken implementation's default) comes back.
+    expect(result).toEqual([sentinelRow])
     const readerQueryTexts = readerCalls.map((c) => c.text.trim().toLowerCase())
     expect(readerQueryTexts[0]).toBe('begin transaction read only')
     expect(readerQueryTexts).toContain('select true as ok')
@@ -211,6 +305,19 @@ describe('withPlatformReadContext', () => {
     expect(auditTexts.some((t) => t.startsWith('select set_config'))).toBe(true)
     expect(auditTexts.some((t) => t.startsWith('insert into audit_log'))).toBe(true)
     expect(auditTexts.some((t) => t === 'commit')).toBe(true)
+
+    // IMPORTANT C: the set_config call's first bound value and the insert's
+    // tenant_id bound value must be the exact SAME tenant id — this is the
+    // whole substance of the earlier Critical fix (they read from one JS
+    // variable and cannot diverge).
+    const setConfigCall = auditCalls.find((c) => c.text.trim().toLowerCase().startsWith('select set_config'))
+    const insertCall = auditCalls.find((c) => c.text.trim().toLowerCase().startsWith('insert into audit_log'))
+    expect(setConfigCall).toBeDefined()
+    expect(insertCall).toBeDefined()
+    const setConfigTenantId = setConfigCall?.values?.[0]
+    const insertTenantId = insertCall?.values?.[0]
+    expect(setConfigTenantId).toBeDefined()
+    expect(setConfigTenantId).toBe(insertTenantId)
   })
 
   it('rolls back and rethrows when work throws, still releasing/ending', async () => {
@@ -306,6 +413,50 @@ describe('withPlatformReadContext', () => {
     ).rejects.toThrow('the real error')
 
     expect(consoleErrorSpy).toHaveBeenCalled()
+    consoleErrorSpy.mockRestore()
+  })
+
+  // IMPORTANT E: recordPlatformRead throws when no tenant row exists at all
+  // (distinct from a connection failure). Assert (a) that specific error is
+  // what's thrown/logged, and (b) the caller's successful result still comes
+  // back, because the audit failure is swallowed in the finally block.
+  it('swallows a "no tenant row exists" audit failure and still returns the caller result', async () => {
+    const { withPlatformReadContext } = await import('@/lib/server/platform-read')
+    const { client: readerClient } = makeFakeClient()
+
+    poolFactories.push(() => ({
+      connect: vi.fn(async () => readerClient),
+      query: vi.fn(),
+      end: vi.fn(async () => {}),
+    }))
+
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    // Audit pool: connects fine, but the tenant lookup returns zero rows.
+    const auditClient = {
+      query: vi.fn(async (text: string) => {
+        if (text.trim().toLowerCase().startsWith('select id from tenants')) {
+          return { rows: [] }
+        }
+        return { rows: [] }
+      }),
+      release: vi.fn(),
+    }
+    poolFactories.push(() => ({
+      connect: vi.fn(async () => auditClient),
+      query: vi.fn(),
+      end: vi.fn(async () => {}),
+    }))
+
+    const result = await withPlatformReadContext({ userId: 'user-1' }, async (read) => {
+      return read.query<{ ok: boolean }>('select true as ok')
+    })
+
+    expect(result).toEqual([])
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('platform-read audit write failed'),
+      expect.objectContaining({ message: expect.stringContaining('no tenant row exists') }),
+    )
     consoleErrorSpy.mockRestore()
   })
 })
