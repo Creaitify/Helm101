@@ -56,7 +56,8 @@ try {
   // ourselves, so Postgres -- not string concatenation -- decides the
   // escaping.
   const literal = await client.query('select quote_literal($1) as lit', [password])
-  const quoted = literal.rows[0].lit
+  const quoted = literal.rows[0]?.lit
+  if (!quoted) throw new Error('quote_literal($1) returned no row/value (unexpected) -- refusing to build an ALTER ROLE statement from an empty result.')
   await client.query(`alter role helm_app with password ${quoted}`)
 
   const check = await client.query(
@@ -73,22 +74,21 @@ try {
   console.log('Verified: helm_app.rolbypassrls = false (RLS cannot be bypassed).')
   console.log(`Verified: helm_app.rolcanlogin = ${row.rolcanlogin}`)
 
-  const url = new URL(connectionString)
-  url.username = 'helm_app'
-  url.password = '***MASKED***'
-  // The unpooled owner URL has no host pooler suffix stripped; the app
-  // should use the pooled endpoint. We only reconstruct the credentials
-  // portion here -- copy the host from your normal pooled connection string.
+  // Deliberately do NOT assemble or print a connection string here. Doing so
+  // previously built one from the UNPOOLED host (NEON_DATABASE_URL_UNPOOLED)
+  // while telling the operator to use the POOLED host instead -- an easy
+  // copy-paste trap where someone grabs the printed (masked) URL, swaps in
+  // the real password, and points NEON_DATABASE_URL at the wrong (unpooled)
+  // host. Print only the username and plain-language instructions instead.
   console.log('')
   console.log('helm_app password set successfully.')
   console.log('')
-  console.log('Connection string (password masked, host/query params taken from NEON_DATABASE_URL_UNPOOLED):')
-  console.log(`  ${url.toString()}`)
-  console.log('')
   console.log('Next steps (this script will NOT do these for you):')
-  console.log('  1. Build the real connection string using the helm_app username, the password')
-  console.log('     you just set, and your normal POOLED Neon host (not the unpooled one above).')
-  console.log('  2. Set it as NEON_DATABASE_URL in .env.local for local dev.')
+  console.log('  1. Take your normal POOLED Neon connection string (NOT NEON_DATABASE_URL_UNPOOLED --')
+  console.log('     that host must never be used by the running app) and swap in:')
+  console.log('       username: helm_app')
+  console.log('       password: the value you just set via HELM_APP_ROLE_PASSWORD')
+  console.log('  2. Set the resulting string as NEON_DATABASE_URL in .env.local for local dev.')
   console.log('  3. Set the same value as NEON_DATABASE_URL in Vercel env for every deployed environment.')
   console.log('  4. Never commit the real password anywhere.')
 } finally {

@@ -32,6 +32,16 @@ $$;
 
 grant usage on schema public to helm_app;
 grant select, insert, update, delete on all tables in schema public to helm_app;
-alter default privileges in schema public grant select, insert, update, delete on tables to helm_app;
+
+-- `alter default privileges` only applies to objects later created BY THE
+-- ROLE NAMED IN `for role ...` (or, without that clause, by whichever role
+-- executes this statement). Without an explicit `for role neondb_owner`,
+-- this default-privileges rule would silently do nothing for tables created
+-- by any other role, and a future migration applied by a different role
+-- would leave its new tables ungranted to helm_app with no error. Migrations
+-- must continue to be applied by `neondb_owner` (the role `NEON_DATABASE_URL_UNPOOLED`
+-- authenticates as) for this clause -- and therefore future tables -- to be
+-- covered.
+alter default privileges for role neondb_owner in schema public grant select, insert, update, delete on tables to helm_app;
 
 revoke truncate on all tables in schema public from helm_app;

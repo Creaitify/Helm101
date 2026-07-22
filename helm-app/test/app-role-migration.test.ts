@@ -23,9 +23,9 @@ describe('migration 0005 (app role)', () => {
     expect(sql).not.toMatch(/alter table[^;]*to helm_app/i)
   })
 
-  it('covers future tables via default privileges, without DDL or truncate', () => {
+  it('covers future tables created by neondb_owner via default privileges, without DDL or truncate', () => {
     expect(sql).toMatch(
-      /alter default privileges in schema public grant select, insert, update, delete on tables to helm_app;/,
+      /alter default privileges for role neondb_owner in schema public grant select, insert, update, delete on tables to helm_app;/,
     )
   })
 })
