@@ -8,6 +8,7 @@ function optional(name: string) {
 export const env = {
   databaseUrl: optional('NEON_DATABASE_URL'),
   databaseUrlUnpooled: optional('NEON_DATABASE_URL_UNPOOLED'),
+  platformReaderUrl: optional('NEON_PLATFORM_READER_URL'),
   authSecret: optional('AUTH_SECRET'),
   googleClientId: optional('AUTH_GOOGLE_ID'),
   googleClientSecret: optional('AUTH_GOOGLE_SECRET'),
