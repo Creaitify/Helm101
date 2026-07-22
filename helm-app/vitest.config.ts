@@ -5,5 +5,5 @@ import path from 'node:path'
 export default defineConfig({
   plugins: [react()],
   test: { environment: 'jsdom', globals: true, setupFiles: ['./test/setup.ts'] },
-  resolve: { alias: { '@': path.resolve(__dirname, '.') } },
+  resolve: { alias: { '@': path.resolve(__dirname, '.'), 'server-only': path.resolve(__dirname, './test/mocks/server-only.ts') } },
 })

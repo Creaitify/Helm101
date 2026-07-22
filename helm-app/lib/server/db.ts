@@ -1,7 +1,7 @@
 import 'server-only'
 import { Pool } from '@neondatabase/serverless'
 import { env, requireServerEnv } from './env'
-import { createTenantContext, establishTenantContext, type TenantContext, type TenantTransaction } from './tenant-context'
+import { createTenantContext, establishTenantContext, type TenantContext, type TenantQueryTransaction } from './tenant-context'
 
 function createPool() {
   return new Pool({ connectionString: requireServerEnv('databaseUrl') })
@@ -22,16 +22,25 @@ export async function checkDatabaseConnection() {
  * Runs work in a Neon transaction after establishing transaction-local RLS
  * context. Repositories receive only this scoped transaction, not a global DB.
  */
-export async function withTenantContext<T>(input: TenantContext, work: (tx: TenantTransaction) => Promise<T>): Promise<T> {
+export async function withTenantContext<T>(
+  input: TenantContext,
+  work: (tx: TenantQueryTransaction) => Promise<T>,
+): Promise<T> {
   const context = createTenantContext(input)
   const pool = createPool()
   const client = await pool.connect()
   try {
     await client.query('begin')
-    const tx: TenantTransaction = {
+    const tx: TenantQueryTransaction = {
       execute: async (statement, values) => {
         if (values) await client.query(statement, [...values])
         else await client.query(statement)
+      },
+      query: async <R>(statement: string, values?: readonly unknown[]) => {
+        const result = values
+          ? await client.query(statement, [...values])
+          : await client.query(statement)
+        return result.rows as R[]
       },
     }
     await establishTenantContext(tx, context)
