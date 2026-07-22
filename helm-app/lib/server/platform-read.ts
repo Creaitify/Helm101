@@ -4,10 +4,27 @@ import { requireServerEnv } from './env'
 
 const WRITE_VERBS = /\b(insert|update|delete|drop|alter|truncate|grant|revoke|create|comment|copy|call|do)\b/i
 
+// `\binto\b` catches `select ... into <table>`, which creates a table and
+// would otherwise sail through this guard (it starts with `select` and
+// contains no blacklisted verb). This can also reject an exotic legitimate
+// query that happens to use "into" as an identifier or in some clause we
+// haven't thought of — that trade-off is correct for a bypass path: a false
+// positive here is a caller filing a bug, a false negative is a write
+// against every tenant's data.
+const INTO_CLAUSE = /\binto\b/i
+
 /**
- * The bypass role can read across every tenant, so the only statements it may
- * ever run are reads. Rejects write verbs anywhere in the statement, which also
- * defeats stacked statements such as "select 1; delete from campaigns".
+ * String-level checks below are defense in depth only — a fast fail-fast
+ * layer that rejects obviously bad input before it reaches the database.
+ * They are NOT the security boundary. The actual control is that every
+ * statement here runs inside a Postgres `begin transaction read only`
+ * block (see `withPlatformReadContext`): Postgres itself rejects any write
+ * — INSERT/UPDATE/DELETE/DDL/SELECT INTO, and writes attempted by a called
+ * function — with error 25006, regardless of how the statement is spelled
+ * or what a stored function does internally. No regex can see into a
+ * function body or reliably parse SQL; the database's transaction mode can
+ * and does enforce this correctly. Do not extend this function's blacklist
+ * in place of tightening the transaction-level control.
  */
 export function assertReadOnlyStatement(statement: string): void {
   const normalized = statement.trim()
@@ -15,6 +32,7 @@ export function assertReadOnlyStatement(statement: string): void {
   const isSelect = /^(select|with)\b/i.test(normalized)
   if (!isSelect) throw new Error(`Platform reads are read-only: statement must begin with select`)
   if (WRITE_VERBS.test(normalized)) throw new Error('Platform reads are read-only: write verb detected')
+  if (INTO_CLAUSE.test(normalized)) throw new Error('Platform reads are read-only: into clause detected')
 }
 
 export interface PlatformReader {
@@ -33,17 +51,29 @@ export async function withPlatformReadContext<T>(
   const client = await pool.connect()
   const statements: string[] = []
   try {
-    const read: PlatformReader = {
-      query: async <R>(statement: string, values?: readonly unknown[]) => {
-        assertReadOnlyStatement(statement)
-        statements.push(statement)
-        const result = values
-          ? await client.query(statement, [...values])
-          : await client.query(statement)
-        return result.rows as R[]
-      },
+    // The real security boundary: Postgres refuses any write inside a
+    // read-only transaction (error 25006) no matter how it's spelled,
+    // including SELECT INTO and writes attempted by a called function.
+    // The `assertReadOnlyStatement` checks above are fail-fast, not this.
+    await client.query('begin transaction read only')
+    try {
+      const read: PlatformReader = {
+        query: async <R>(statement: string, values?: readonly unknown[]) => {
+          assertReadOnlyStatement(statement)
+          statements.push(statement)
+          const result = values
+            ? await client.query(statement, [...values])
+            : await client.query(statement)
+          return result.rows as R[]
+        },
+      }
+      const result = await work(read)
+      await client.query('commit')
+      return result
+    } catch (error) {
+      await client.query('rollback')
+      throw error
     }
-    return await work(read)
   } finally {
     client.release()
     await pool.end()
