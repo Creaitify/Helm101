@@ -39,14 +39,14 @@ export interface Membership {
 export async function resolveMembership(email: string, activeTenantId?: string): Promise<Membership | null> {
   const pool = new Pool({ connectionString: requireServerEnv('databaseUrl') })
   try {
+    // users has forced RLS keyed on app.tenant_id, which cannot be set before
+    // identity is known. helm_lookup_membership (0007) is a SECURITY DEFINER
+    // function that exposes exactly one narrow, parameterised path -- at most
+    // one row for a single email -- instead of the whole table. See that
+    // migration for the full rationale.
     const { rows } = await pool.query(
-      `select u.id, u.tenant_id, u.role, t.slug,
-              (pa.user_id is not null) as is_platform_admin
-       from users u
-       join tenants t on t.id = u.tenant_id
-       left join platform_admins pa on pa.user_id = u.id
-       where lower(u.email) = lower($1) and u.status = 'active'
-       limit 1`,
+      `select user_id as id, tenant_id, tenant_slug as slug, role, is_platform_admin
+       from helm_lookup_membership($1)`,
       [email],
     )
     const row = rows[0]
