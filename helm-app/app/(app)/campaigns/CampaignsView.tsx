@@ -1,5 +1,5 @@
 'use client'
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef } from 'react'
 import type { CampaignFull, CampaignDetail } from '@/lib/types'
 import { fetchCampaignDetail } from './actions'
 import { Card } from '@/components/ui/Card'
@@ -15,6 +15,7 @@ export function CampaignsView({ campaigns }: { campaigns: CampaignFull[] }) {
   const [status, setStatus] = useState('all')
   const [detail, setDetail] = useState<CampaignDetail | null>(null)
   const [open, setOpen] = useState(false)
+  const requestedId = useRef<string | null>(null) // MINOR E: ignore a response that is no longer the latest request
   const [sort, setSort] = useState<{ key: 'name' | 'channel' | 'status' | 'spend' | 'pacingPct' | 'cac' | 'roas'; direction: 'asc' | 'desc' }>({ key: 'spend', direction: 'desc' })
 
   const rows = useMemo(() => [...campaigns.filter((c) =>
@@ -36,9 +37,11 @@ export function CampaignsView({ campaigns }: { campaigns: CampaignFull[] }) {
   }
 
   async function openDetail(id: string) {
+    requestedId.current = id // capture this request's id; a stale response is ignored below
     setDetail(null) // never show a previous campaign's detail while the new one loads (or fails)
     setOpen(true)
     const result = await fetchCampaignDetail(id)
+    if (requestedId.current !== id) return // a newer click superseded this request; drop the stale response
     setDetail(result)
     if (!result) setOpen(false) // no data for this id: close rather than show a stale/blank pane
   }

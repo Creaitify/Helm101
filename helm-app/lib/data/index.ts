@@ -34,20 +34,65 @@ export function isNextControlFlowSignal(error: unknown): boolean {
 }
 
 /**
- * True for the two conditions that legitimately mean "no database here":
- * an unconfigured/unreachable Neon connection (by Node socket error code,
- * not message text -- Postgres error messages can embed offending row
- * values, so message-substring matching risks misclassifying a genuine SQL
- * error), and an unauthenticated or unprovisioned caller (by instanceof
- * against the real exported error classes, not constructor.name, which any
- * unrelated same-named class would satisfy). Anything else is a real bug and
- * must stay visible.
+ * Node socket-level errno codes that indicate "could not reach a database at
+ * all" (as opposed to a database that responded with a SQL/auth error).
+ */
+const EXPECTED_SOCKET_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'ETIMEDOUT', 'EAI_AGAIN'])
+
+/**
+ * True when `error` is the @neondatabase/serverless driver's connect-failure
+ * wrapper: `new Error('Error connecting to database: ' + e)` with
+ * `.sourceError = e` set to the underlying transport error. The driver never
+ * puts a Node errno on the wrapper's own `.code` -- that field is reused by
+ * NeonDbError (a DIFFERENT class, thrown for actual SQL errors) to carry the
+ * Postgres SQLSTATE, e.g. '42703' for an undefined column. Reading `.code`
+ * off an arbitrary error would therefore risk comparing a SQLSTATE against
+ * Node errno constants -- structurally the same message-substring-style
+ * misclassification this function exists to avoid. So the wrapper shape is
+ * verified first (message prefix OR presence of `.sourceError`), and only
+ * then is the INNER `sourceError.code` inspected.
+ */
+function connectFailureErrnoCode(error: unknown): string | undefined {
+  if (!(error instanceof Error)) return undefined
+  const sourceError = (error as { sourceError?: { code?: unknown } }).sourceError
+  const looksLikeConnectWrapper =
+    /^Error connecting to database:/.test(error.message) || sourceError !== undefined
+  if (!looksLikeConnectWrapper) return undefined
+  const code = sourceError?.code
+  return typeof code === 'string' ? code : undefined
+}
+
+/**
+ * True for Postgres SQLSTATEs meaning the credentials themselves were
+ * rejected: 28P01 (invalid_password) and 28000
+ * (invalid_authorization_specification). Read off NeonDbError's top-level
+ * `.code`, which the driver documents as carrying the SQLSTATE. A bad
+ * password is a fail-loud condition (see isAuthFailure's caller), never an
+ * "expected fallback" -- silently serving fixtures for a wrong credential
+ * hides the misconfiguration from whoever is looking at it.
+ */
+export function isAuthFailure(error: unknown): boolean {
+  const code = (error as { code?: unknown })?.code
+  return code === '28P01' || code === '28000'
+}
+
+/**
+ * True for the conditions that legitimately mean "no database here": an
+ * unconfigured/unreachable Neon connection (by the wrapped socket errno --
+ * see connectFailureErrnoCode -- never by message-substring matching, since
+ * Postgres error messages can embed offending row values and risk
+ * misclassifying a genuine SQL error), and an unauthenticated or
+ * unprovisioned caller (by instanceof against the real exported error
+ * classes, not constructor.name, which any unrelated same-named class would
+ * satisfy). An authentication failure is deliberately NOT included here --
+ * see isAuthFailure, which callers must check first and re-throw
+ * unconditionally. Anything else is a real bug and must stay visible.
  */
 export function isExpectedFallback(error: unknown): boolean {
   if (isNextControlFlowSignal(error)) return false
+  if (isAuthFailure(error)) return false
   if (error instanceof UnauthenticatedError || error instanceof NoMembershipError) return true
-  const code = (error as NodeJS.ErrnoException)?.code
-  if (code === 'ECONNREFUSED' || code === 'ENOTFOUND') return true
+  if (EXPECTED_SOCKET_CODES.has(connectFailureErrnoCode(error) ?? '')) return true
   const message = error instanceof Error ? error.message : ''
   return /^Missing required server environment variable/.test(message)
 }
@@ -61,8 +106,10 @@ export function isExpectedFallback(error: unknown): boolean {
  * database": unexpected errors are logged, and in production they throw.
  * Next's own control-flow signals (DYNAMIC_SERVER_USAGE, NEXT_REDIRECT) are
  * re-thrown untouched before any other classification. An RlsBypassError
- * (misconfigured database role) always re-throws, in every environment --
- * never falls back to fixtures.
+ * (misconfigured database role) or an authentication failure (bad
+ * credentials -- see isAuthFailure) always re-throws, in every environment --
+ * never falls back to fixtures. A wrong password must be loud, not silently
+ * answered with a fully-populated fixture UI.
  */
 async function read<V>(work: (tx: import('../server/tenant-context').TenantQueryTransaction) => Promise<V>, fallback: V): Promise<V> {
   if (!process.env.NEON_DATABASE_URL) return fallback
@@ -74,6 +121,7 @@ async function read<V>(work: (tx: import('../server/tenant-context').TenantQuery
   } catch (error) {
     if (isNextControlFlowSignal(error)) throw error
     if (error instanceof RlsBypassError) throw error
+    if (isAuthFailure(error)) throw error
     if (isExpectedFallback(error)) return fallback
     console.error('[data] repository read failed, serving fixtures', error)
     if (isProduction()) throw error
@@ -119,10 +167,18 @@ export const getCampaignsFull = async (): Promise<T.CampaignFull[]> => {
  * session" path; the inner repository result is never coerced to a fixture,
  * since fetchCampaignDetail is a 'use server' action (a network endpoint)
  * and the id is attacker-controlled regardless of what the UI sends.
+ *
+ * The outer fallback is also id-aware: fx.campaignDetail(id) itself falls
+ * back to campaignsFull[0] for ANY unknown id (fixtures.ts is not modified
+ * here), so on the legitimate no-database/unauthenticated path an arbitrary
+ * client-controlled id would otherwise still fabricate a populated detail
+ * pane. The existence check below happens in this file instead: only call
+ * fx.campaignDetail(id) when id actually names a fixture row.
  */
 export const getCampaignDetail = async (id: string): Promise<T.CampaignDetail | null> => {
   const { getCampaignDetailRow } = await import('../repositories/campaigns')
-  return read((tx) => getCampaignDetailRow(tx, id), fx.campaignDetail(id))
+  const fallback = fx.campaignsFull.some((c) => c.id === id) ? fx.campaignDetail(id) : null
+  return read((tx) => getCampaignDetailRow(tx, id), fallback)
 }
 
 export const getApprovals = async (): Promise<T.ApprovalItem[]> => {
@@ -191,6 +247,7 @@ export const getCurrentTenantValue = async (): Promise<TenantValue | undefined> 
   } catch (error) {
     if (isNextControlFlowSignal(error)) throw error
     if (error instanceof RlsBypassError) throw error
+    if (isAuthFailure(error)) throw error
     if (isExpectedFallback(error)) return undefined
     console.error('[data] tenant value read failed', error)
     if (isProduction()) throw error

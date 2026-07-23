@@ -2,6 +2,19 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import * as data from '@/lib/data'
 import { UnauthenticatedError, NoMembershipError } from '@/lib/server/tenant-session'
 
+// MINOR G: a shared mock factory that re-exports the REAL RlsBypassError (via
+// importActual) instead of each call site redeclaring `class extends Error
+// {}`, which is a different class object than the one lib/data/index.ts
+// imports -- `instanceof` against it would silently be false, letting a test
+// take the wrong branch without failing.
+async function mockDb(overrides: Record<string, unknown>) {
+  const actual = await vi.importActual<typeof import('@/lib/server/db')>('@/lib/server/db')
+  vi.doMock('@/lib/server/db', () => ({
+    ...actual,
+    ...overrides,
+  }))
+}
+
 describe('data layer cutover', () => {
   it('falls back to fixtures when no database is configured', async () => {
     delete process.env.NEON_DATABASE_URL
@@ -31,18 +44,53 @@ describe('fallback classification', () => {
   it('treats missing config and unauthenticated callers as expected', async () => {
     const { isExpectedFallback } = await import('@/lib/data')
     expect(isExpectedFallback(new Error('Missing required server environment variable: databaseUrl'))).toBe(true)
-    const econnrefused = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:5432'), { code: 'ECONNREFUSED' })
-    expect(isExpectedFallback(econnrefused)).toBe(true)
-    const enotfound = Object.assign(new Error('getaddrinfo ENOTFOUND example.invalid'), { code: 'ENOTFOUND' })
-    expect(isExpectedFallback(enotfound)).toBe(true)
     expect(isExpectedFallback(new UnauthenticatedError())).toBe(true)
     expect(isExpectedFallback(new NoMembershipError('a@b.com'))).toBe(true)
+  })
+
+  // CRITICAL A: the driver never sets a Node errno on a top-level `.code` --
+  // that field is reused by NeonDbError to carry the Postgres SQLSTATE. The
+  // real connect-failure shape (verified against
+  // node_modules/@neondatabase/serverless/index.js) is:
+  //   new Error('Error connecting to database: ' + e); err.sourceError = e
+  // with the Node errno on the INNER sourceError.code.
+  it('treats a real Neon connect-failure wrapper (sourceError.code) as expected', async () => {
+    const { isExpectedFallback } = await import('@/lib/data')
+    const econnrefused = Object.assign(
+      new Error('Error connecting to database: connect ECONNREFUSED 127.0.0.1:5432'),
+      { sourceError: Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:5432'), { code: 'ECONNREFUSED' }) },
+    )
+    expect(isExpectedFallback(econnrefused)).toBe(true)
+    const enotfound = Object.assign(
+      new Error('Error connecting to database: getaddrinfo ENOTFOUND example.invalid'),
+      { sourceError: Object.assign(new Error('getaddrinfo ENOTFOUND example.invalid'), { code: 'ENOTFOUND' }) },
+    )
+    expect(isExpectedFallback(enotfound)).toBe(true)
   })
 
   it('does NOT swallow a genuine query bug', async () => {
     const { isExpectedFallback } = await import('@/lib/data')
     expect(isExpectedFallback(new Error('column "spend_minor" does not exist'))).toBe(false)
     expect(isExpectedFallback(new Error('syntax error at or near "slect"'))).toBe(false)
+  })
+
+  // CRITICAL A (part 2): a NeonDbError-shaped error carrying a top-level
+  // SQLSTATE on `.code` (e.g. '42703' undefined column) must NOT be
+  // classified as expected merely because it happens to have a `.code`
+  // property -- that would be the same class of bug as message-substring
+  // matching, displaced onto the wrong field.
+  it('does NOT classify a NeonDbError-shaped SQLSTATE error as expected', async () => {
+    const { isExpectedFallback } = await import('@/lib/data')
+    class NeonDbError extends Error {
+      code: string | undefined
+      constructor(message: string, code: string) {
+        super(message)
+        this.name = 'NeonDbError'
+        this.code = code
+      }
+    }
+    const undefinedColumn = new NeonDbError('column "spend_minor" does not exist', '42703')
+    expect(isExpectedFallback(undefinedColumn)).toBe(false)
   })
 
   // IMPORTANT 5: constructor.name matching means any unrelated class sharing
@@ -91,6 +139,25 @@ describe('fallback classification', () => {
     expect(isNextControlFlowSignal(redirect)).toBe(true)
     expect(isNextControlFlowSignal(new Error('column does not exist'))).toBe(false)
   })
+
+  // IMPORTANT B: a bad DB password must fail loud, not be silently answered
+  // with a fully-populated fixture UI. Postgres SQLSTATE 28P01
+  // (invalid_password) / 28000 (invalid_authorization_specification) is
+  // read off NeonDbError's top-level `.code` -- a structural check, not
+  // message-substring matching.
+  it('classifies a SQLSTATE 28P01/28000 auth failure as NOT expected-fallback (must fail loud)', async () => {
+    const { isExpectedFallback, isAuthFailure } = (await import('@/lib/data')) as unknown as {
+      isExpectedFallback: (e: unknown) => boolean
+      isAuthFailure: (e: unknown) => boolean
+    }
+    const badPassword = Object.assign(new Error('password authentication failed for user "app"'), { code: '28P01' })
+    const badAuthSpec = Object.assign(new Error('no pg_hba.conf entry for host'), { code: '28000' })
+    expect(isAuthFailure(badPassword)).toBe(true)
+    expect(isAuthFailure(badAuthSpec)).toBe(true)
+    expect(isExpectedFallback(badPassword)).toBe(false)
+    expect(isExpectedFallback(badAuthSpec)).toBe(false)
+    expect(isAuthFailure(new Error('column "spend_minor" does not exist'))).toBe(false)
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -119,12 +186,11 @@ describe('production re-throw for unexpected errors', () => {
       NoMembershipError: class extends Error {},
       requireTenantContext: async () => ({ tenantId: 't1' }),
     }))
-    vi.doMock('@/lib/server/db', () => ({
-      RlsBypassError: class extends Error {},
+    await mockDb({
       withTenantContext: async () => {
         throw new Error('column "spend_minor" does not exist')
       },
-    }))
+    })
     const freshData = await import('@/lib/data')
     await expect(freshData.getCampaignsFull()).rejects.toThrow('column "spend_minor" does not exist')
   })
@@ -136,12 +202,11 @@ describe('production re-throw for unexpected errors', () => {
       NoMembershipError: class extends Error {},
       requireTenantContext: async () => ({ tenantId: 't1' }),
     }))
-    vi.doMock('@/lib/server/db', () => ({
-      RlsBypassError: class extends Error {},
+    await mockDb({
       withTenantContext: async () => {
         throw new Error('column "spend_minor" does not exist')
       },
-    }))
+    })
     const freshData = await import('@/lib/data')
     await expect(freshData.getCampaignsFull()).rejects.toThrow('column "spend_minor" does not exist')
   })
@@ -152,12 +217,11 @@ describe('production re-throw for unexpected errors', () => {
       NoMembershipError: class extends Error {},
       requireTenantContext: async () => ({ tenantId: 't1' }),
     }))
-    vi.doMock('@/lib/server/db', () => ({
-      RlsBypassError: class extends Error {},
+    await mockDb({
       withTenantContext: async () => {
         throw new Error('column "spend_minor" does not exist')
       },
-    }))
+    })
     const freshData = await import('@/lib/data')
     const campaigns = await freshData.getCampaignsFull()
     expect(campaigns.length).toBe(8)
@@ -170,12 +234,11 @@ describe('production re-throw for unexpected errors', () => {
       NoMembershipError: class extends Error {},
       requireTenantContext: async () => ({ tenantId: 't1' }),
     }))
-    vi.doMock('@/lib/server/db', () => ({
-      RlsBypassError: class extends Error {},
+    await mockDb({
       withTenantContext: async () => {
         throw new Error('column "spend_minor" does not exist')
       },
-    }))
+    })
     const freshData = await import('@/lib/data')
     await expect(freshData.getCampaignsFull()).rejects.toThrow('column "spend_minor" does not exist')
   })
@@ -205,10 +268,9 @@ describe('getCampaignDetail: unknown id on the DB path', () => {
       NoMembershipError: class extends Error {},
       requireTenantContext: async () => ({ tenantId: 't1' }),
     }))
-    vi.doMock('@/lib/server/db', () => ({
-      RlsBypassError: class extends Error {},
+    await mockDb({
       withTenantContext: async (_ctx: unknown, work: (tx: unknown) => unknown) => work({}),
-    }))
+    })
     vi.doMock('@/lib/repositories/campaigns', () => ({
       getCampaignDetailRow: async () => null,
     }))
@@ -224,10 +286,9 @@ describe('getCampaignDetail: unknown id on the DB path', () => {
       NoMembershipError: class extends Error {},
       requireTenantContext: async () => ({ tenantId: 't1' }),
     }))
-    vi.doMock('@/lib/server/db', () => ({
-      RlsBypassError: class extends Error {},
+    await mockDb({
       withTenantContext: async (_ctx: unknown, work: (tx: unknown) => unknown) => work({}),
-    }))
+    })
     vi.doMock('@/lib/repositories/campaigns', () => ({
       getCampaignDetailRow: async () => fakeDetail,
     }))
@@ -238,9 +299,19 @@ describe('getCampaignDetail: unknown id on the DB path', () => {
 
   it('still falls back to the fixture (the legitimate no-database path) when no database is configured', async () => {
     delete process.env.NEON_DATABASE_URL
-    const result = await data.getCampaignDetail('any-id')
+    const result = await data.getCampaignDetail('c1')
     expect(result).not.toBeNull()
     expect(result?.campaign).toBeDefined()
+  })
+
+  // IMPORTANT C: fixtures.campaignDetail(id) itself falls back to
+  // campaignsFull[0] for ANY unknown id. On the legitimate no-database path
+  // (e.g. an unauthenticated caller) an attacker-controlled id must still
+  // yield null, not a fabricated populated campaign pane.
+  it('returns null (not a fabricated fixture) for an unknown id on the no-database path', async () => {
+    delete process.env.NEON_DATABASE_URL
+    const result = await data.getCampaignDetail('definitely-not-a-real-campaign-id')
+    expect(result).toBeNull()
   })
 })
 
@@ -269,16 +340,47 @@ describe('RLS-bypass guard fails closed', () => {
       NoMembershipError: class extends Error {},
       requireTenantContext: async () => ({ tenantId: 't1' }),
     }))
-    vi.doMock('@/lib/server/db', async () => {
-      const actual = await vi.importActual<typeof import('@/lib/server/db')>('@/lib/server/db')
-      return {
-        ...actual,
-        withTenantContext: async () => {
-          throw new actual.RlsBypassError('neondb_owner')
-        },
-      }
+    await mockDb({
+      withTenantContext: async () => {
+        throw new RlsBypassError('neondb_owner')
+      },
     })
     const freshData = await import('@/lib/data')
     await expect(freshData.getCampaignsFull()).rejects.toBeInstanceOf(RlsBypassError)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// IMPORTANT B: an authentication failure (bad DB password) must fail closed
+// in every environment, never fall back to fixtures -- same fail-loud class
+// as RlsBypassError.
+// ---------------------------------------------------------------------------
+describe('auth failure fails closed', () => {
+  beforeEach(() => {
+    vi.resetModules()
+    process.env.NEON_DATABASE_URL = 'postgres://fake'
+  })
+
+  afterEach(() => {
+    delete process.env.NEON_DATABASE_URL
+    vi.unstubAllEnvs()
+    vi.doUnmock('@/lib/server/tenant-session')
+    vi.doUnmock('@/lib/server/db')
+    vi.resetModules()
+  })
+
+  it('re-throws a SQLSTATE 28P01 auth failure unconditionally, even outside production', async () => {
+    vi.doMock('@/lib/server/tenant-session', () => ({
+      UnauthenticatedError: class extends Error {},
+      NoMembershipError: class extends Error {},
+      requireTenantContext: async () => ({ tenantId: 't1' }),
+    }))
+    await mockDb({
+      withTenantContext: async () => {
+        throw Object.assign(new Error('password authentication failed for user "app"'), { code: '28P01' })
+      },
+    })
+    const freshData = await import('@/lib/data')
+    await expect(freshData.getCampaignsFull()).rejects.toThrow('password authentication failed')
   })
 })
