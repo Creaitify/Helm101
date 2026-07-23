@@ -79,8 +79,18 @@ export function isExpectedFallback(error: unknown): boolean {
 
 /**
  * Runs a repository read under tenant RLS, falling back to fixtures when no
- * database is configured or the caller has no session. The fallback is what
- * keeps tests and local development working without Neon.
+ * database is configured at all, or to `unavailable` on a genuine outage
+ * with a database configured. The `fallback` fixture is what keeps tests and
+ * local development working without Neon; it must NEVER be served once a
+ * real database is configured but temporarily unreachable (Finding I4) --
+ * doing so would show an authenticated user of ANY tenant plausible-looking
+ * fixture numbers that belong to nobody's real account (spec S8 wants an
+ * empty state during an outage, not fabricated content). `unavailable`
+ * defaults to `fallback` for the unauthenticated/no-membership case (there
+ * genuinely is no tenant-scoped data to misrepresent there -- see
+ * isExpectedFallback), and is required to be passed explicitly by callers
+ * for the DatabaseUnreachableError case specifically; see the two-argument
+ * overload below.
  *
  * A genuine query bug must never be silently indistinguishable from "no
  * database": unexpected errors are logged, and in production they throw.
@@ -91,7 +101,11 @@ export function isExpectedFallback(error: unknown): boolean {
  * never falls back to fixtures. A wrong password must be loud, not silently
  * answered with a fully-populated fixture UI.
  */
-async function read<V>(work: (tx: import('../server/tenant-context').TenantQueryTransaction) => Promise<V>, fallback: V): Promise<V> {
+async function read<V>(
+  work: (tx: import('../server/tenant-context').TenantQueryTransaction) => Promise<V>,
+  fallback: V,
+  unavailable: V = fallback,
+): Promise<V> {
   if (!process.env.NEON_DATABASE_URL) return fallback
   try {
     const { requireTenantContext } = await import('../server/tenant-session')
@@ -102,11 +116,18 @@ async function read<V>(work: (tx: import('../server/tenant-context').TenantQuery
     if (isNextControlFlowSignal(error)) throw error
     if (error instanceof RlsBypassError) throw error
     if (isAuthFailure(error)) throw error
+    if (error instanceof DatabaseUnreachableError) {
+      // A database IS configured here (the early-return above only fires
+      // when it is not), so this is a genuine outage, not "no database
+      // here". Never serve fixtures for it -- see the doc comment above.
+      console.warn('[data] database unreachable, serving empty result:', error instanceof Error ? error.message : error)
+      return unavailable
+    }
     if (isExpectedFallback(error)) {
-      // MINOR: without this, a genuine outage (DatabaseUnreachableError) that
-      // falls back to fixtures leaves NO log line at all -- only the
-      // "unexpected error" branch below logs. One line, no per-row noise.
-      console.warn('[data] database unreachable, serving fixtures:', error instanceof Error ? error.message : error)
+      // Remaining expected-fallback cases (unauthenticated/no membership,
+      // env not configured): no tenant-scoped data exists to misrepresent,
+      // so the fixture fallback is fine here.
+      console.warn('[data] no tenant session, serving fixtures:', error instanceof Error ? error.message : error)
       return fallback
     }
     console.error('[data] repository read failed, serving fixtures', error)
@@ -137,51 +158,58 @@ export const getBriefDefaults = () => delay<T.Brief>(fx.briefDefaults)
 
 export const getUsers = async (): Promise<T.User[]> => {
   const { listUsers } = await import('../repositories/directory')
-  return read((tx) => listUsers(tx), fx.users)
+  return read((tx) => listUsers(tx), fx.users, [])
 }
 
 export const getCampaignsFull = async (): Promise<T.CampaignFull[]> => {
   const { listCampaigns } = await import('../repositories/campaigns')
-  return read((tx) => listCampaigns(tx), fx.campaignsFull)
+  return read((tx) => listCampaigns(tx), fx.campaignsFull, [])
 }
 
 /**
  * Returns null (never fabricated fixture data) when the id does not resolve
  * to a row this tenant can see -- whether because RLS correctly hid another
- * tenant's campaign, or the id is simply unknown. The OUTER fallback
- * argument to read() is the only legitimate "no database configured/no
- * session" path; the inner repository result is never coerced to a fixture,
- * since fetchCampaignDetail is a 'use server' action (a network endpoint)
- * and the id is attacker-controlled regardless of what the UI sends.
+ * tenant's campaign, the id is simply unknown, or (Finding I4) the database
+ * is configured but a genuine outage is in progress. The `fallback` argument
+ * to read() is used ONLY for the legitimate "no database configured/no
+ * session" path; a DatabaseUnreachableError instead gets the explicit `null`
+ * `unavailable` argument below, so an authenticated user of ANY tenant never
+ * receives Finnovate's fixture campaign detail (ids c1-c8) during an outage
+ * -- fixture data is not live, so this was not a cross-tenant isolation
+ * break, but it did misrepresent another tenant's numbers as this caller's
+ * own (spec S8 wants an empty state instead). The inner repository result is
+ * never coerced to a fixture either way, since fetchCampaignDetail is a
+ * 'use server' action (a network endpoint) and the id is attacker-controlled
+ * regardless of what the UI sends.
  *
- * The outer fallback is also id-aware: fx.campaignDetail(id) itself falls
- * back to campaignsFull[0] for ANY unknown id (fixtures.ts is not modified
- * here), so on the legitimate no-database/unauthenticated path an arbitrary
- * client-controlled id would otherwise still fabricate a populated detail
- * pane. The existence check below happens in this file instead: only call
- * fx.campaignDetail(id) when id actually names a fixture row.
+ * The no-database `fallback` is also id-aware: fx.campaignDetail(id) itself
+ * falls back to campaignsFull[0] for ANY unknown id (fixtures.ts is not
+ * modified here), so on the legitimate no-database/unauthenticated path an
+ * arbitrary client-controlled id would otherwise still fabricate a populated
+ * detail pane. The existence check below happens in this file instead: only
+ * call fx.campaignDetail(id) when id actually names a fixture row.
  */
 export const getCampaignDetail = async (id: string): Promise<T.CampaignDetail | null> => {
   const { getCampaignDetailRow } = await import('../repositories/campaigns')
   const fallback = fx.campaignsFull.some((c) => c.id === id) ? fx.campaignDetail(id) : null
-  return read((tx) => getCampaignDetailRow(tx, id), fallback)
+  return read((tx) => getCampaignDetailRow(tx, id), fallback, null)
 }
 
 export const getApprovals = async (): Promise<T.ApprovalItem[]> => {
   const { listApprovals } = await import('../repositories/approvals')
-  return read((tx) => listApprovals(tx), fx.approvals)
+  return read((tx) => listApprovals(tx), fx.approvals, [])
 }
 
 export const getPromptTemplates = async (): Promise<T.PromptTemplate[]> => {
   const { listPromptTemplates } = await import('../repositories/conversations')
-  return read((tx) => listPromptTemplates(tx), fx.promptTemplates)
+  return read((tx) => listPromptTemplates(tx), fx.promptTemplates, [])
 }
 
 export const getIntegrations = () => delay<T.IntegrationRow[]>(fx.integrations)
 
 export const getIntegrationsFull = async (): Promise<T.IntegrationDetail[]> => {
   const { listIntegrations } = await import('../repositories/directory')
-  return read((tx) => listIntegrations(tx), fx.integrationsFull)
+  return read((tx) => listIntegrations(tx), fx.integrationsFull, [])
 }
 
 /**

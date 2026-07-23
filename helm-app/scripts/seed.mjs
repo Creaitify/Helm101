@@ -154,6 +154,45 @@ try {
   }
   console.log(`Integrations -> ${fx.integrationsFull.length}`)
 
+  // Spec S6 lists conversations and messages among the tables the seed
+  // converts, but lib/data/mock/fixtures.ts has no chat-history fixture to
+  // derive them from (no ChatMessage[] or conversation shape exists there).
+  // Seeding a small, clearly-labelled starter conversation instead of
+  // leaving Workspace with no history on a fresh database. `conversations`
+  // and `messages` have no natural-key unique constraint to `on conflict`
+  // against (unlike prompt_templates' `(tenant_id, external_ref)`), so
+  // idempotency is enforced here in application code: only insert if a
+  // conversation with this exact title does not already exist for the
+  // tenant.
+  const STARTER_TITLE = 'Welcome to HELM (seed starter conversation)'
+  const existingConversation = await client.query(
+    'select id from conversations where tenant_id = $1 and title = $2',
+    [tenantId, STARTER_TITLE],
+  )
+  if (existingConversation.rows.length === 0) {
+    const conversation = await client.query(
+      `insert into conversations (tenant_id, user_id, title) values ($1, $2, $3) returning id`,
+      [tenantId, admin.rows[0].id, STARTER_TITLE],
+    )
+    const conversationId = conversation.rows[0].id
+    const starterMessages = [
+      { role: 'user', text: 'What can HELM help me with today?' },
+      {
+        role: 'assistant',
+        text: 'I can help you review campaign performance, draft creative variants, and route approvals across your marketing stack. This is seed-generated starter content, not a real conversation -- fixtures.ts has no chat-history fixture to derive from yet.',
+      },
+    ]
+    for (const m of starterMessages) {
+      await client.query(
+        `insert into messages (tenant_id, conversation_id, role, text) values ($1, $2, $3, $4)`,
+        [tenantId, conversationId, m.role, m.text],
+      )
+    }
+    console.log(`Conversations -> 1 (starter), Messages -> ${starterMessages.length}`)
+  } else {
+    console.log('Conversations -> already seeded, skipping')
+  }
+
   await client.query('commit')
   console.log('Seed complete.')
 } catch (error) {

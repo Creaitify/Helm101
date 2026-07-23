@@ -1,3 +1,9 @@
+-- SUPERSEDED by 0008_membership_lookup_all.sql, which replaces
+-- helm_lookup_membership to return ALL of the caller's active memberships
+-- (not just one, via `limit 1` below) so a user with roles in more than one
+-- tenant can be handled correctly. Do not trust the `limit 1` version below
+-- in isolation -- read 0008 for the function actually in effect.
+--
 -- Identity must be resolved BEFORE a tenant context can exist, but users has
 -- forced RLS keyed on app.tenant_id. This SECURITY DEFINER function is the one
 -- narrow, parameterised exception: it returns at most one membership row for a

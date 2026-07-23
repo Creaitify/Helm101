@@ -1,8 +1,16 @@
 'use client'
 import { useRouter } from 'next/navigation'
-import type { Tenant } from '@/lib/types'
+import type { SwitchableTenant } from '@/lib/types'
 
-export function TenantSwitcher({ tenants, activeId }: { tenants: Tenant[]; activeId: string }) {
+/**
+ * `activeId` and each option's `value` are the tenant's real UUID
+ * (`SwitchableTenant.tenantId`), NOT the slug. `Tenant.id` (lib/types.ts) is
+ * the slug and is display-only elsewhere in the app; using it here would
+ * POST a slug to /api/tenant/switch, which stores it in a cookie compared
+ * against a `uuid` column -- see the fix history on this component for the
+ * lockout that caused.
+ */
+export function TenantSwitcher({ tenants, activeId }: { tenants: SwitchableTenant[]; activeId: string }) {
   const router = useRouter()
   if (tenants.length <= 1) return null
 
@@ -21,7 +29,7 @@ export function TenantSwitcher({ tenants, activeId }: { tenants: Tenant[]; activ
       }}
     >
       {tenants.map((tenant) => (
-        <option key={tenant.id} value={tenant.id}>{tenant.name}</option>
+        <option key={tenant.tenantId} value={tenant.tenantId}>{tenant.name}</option>
       ))}
     </select>
   )

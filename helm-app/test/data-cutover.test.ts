@@ -352,11 +352,16 @@ describe('RLS-bypass guard fails closed', () => {
 })
 
 // ---------------------------------------------------------------------------
-// CRITICAL (round 3): a real DatabaseUnreachableError raised through
-// withTenantContext must fall back to fixtures, not 500 the request -- this
-// is the actual production behavior a Neon outage now needs.
+// Finding I4: a real DatabaseUnreachableError raised through withTenantContext
+// must NOT throw (no 500), but it must also NOT serve fixtures -- Finnovate's
+// fixture campaign detail (ids c1-c8) leaking to an authenticated user of any
+// other tenant during a genuine outage would misrepresent someone else's
+// data with plausible-looking numbers (spec S8). Fixtures are reserved for
+// the genuine no-NEON_DATABASE_URL case, asserted separately below. An
+// outage with a database CONFIGURED must surface an empty result so the UI
+// renders its empty state instead.
 // ---------------------------------------------------------------------------
-describe('DatabaseUnreachableError falls back to fixtures', () => {
+describe('DatabaseUnreachableError with a configured database returns empty, not fixtures', () => {
   beforeEach(() => {
     vi.resetModules()
     process.env.NEON_DATABASE_URL = 'postgres://fake'
@@ -370,7 +375,7 @@ describe('DatabaseUnreachableError falls back to fixtures', () => {
     vi.resetModules()
   })
 
-  it('falls back to fixtures (does not throw, even in production) when withTenantContext throws DatabaseUnreachableError', async () => {
+  it('does not throw (even in production) but returns an EMPTY list, not Finnovate fixture campaigns', async () => {
     vi.stubEnv('NODE_ENV', 'production')
     const { DatabaseUnreachableError: RealDatabaseUnreachableError } = await import('@/lib/server/db')
     await mockTenantSession({
@@ -383,6 +388,54 @@ describe('DatabaseUnreachableError falls back to fixtures', () => {
     })
     const freshData = await import('@/lib/data')
     const campaigns = await freshData.getCampaignsFull()
+    expect(campaigns).toEqual([])
+  })
+
+  it('getCampaignDetail returns null (not Finnovate\'s fixture detail) during an outage, for any id including c1-c8', async () => {
+    const { DatabaseUnreachableError: RealDatabaseUnreachableError } = await import('@/lib/server/db')
+    await mockTenantSession({
+      requireTenantContext: async () => ({ tenantId: 't1' }),
+    })
+    await mockDb({
+      withTenantContext: async () => {
+        throw new RealDatabaseUnreachableError(new Error('connect ECONNREFUSED'))
+      },
+    })
+    const freshData = await import('@/lib/data')
+    // 'c1' is a real fixture id -- proves the outage path is reserved
+    // regardless of whether the id would otherwise resolve to a fixture.
+    const result = await freshData.getCampaignDetail('c1')
+    expect(result).toBeNull()
+  })
+
+  it('every array-shaped read() caller returns empty during an outage, not its fixture', async () => {
+    const { DatabaseUnreachableError: RealDatabaseUnreachableError } = await import('@/lib/server/db')
+    await mockTenantSession({
+      requireTenantContext: async () => ({ tenantId: 't1' }),
+    })
+    await mockDb({
+      withTenantContext: async () => {
+        throw new RealDatabaseUnreachableError(new Error('connect ECONNREFUSED'))
+      },
+    })
+    const freshData = await import('@/lib/data')
+    expect(await freshData.getUsers()).toEqual([])
+    expect(await freshData.getApprovals()).toEqual([])
+    expect(await freshData.getPromptTemplates()).toEqual([])
+    expect(await freshData.getIntegrationsFull()).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Companion to the outage tests above: the genuine no-database dev/test path
+// (NEON_DATABASE_URL unset entirely) must still serve fixtures -- this is
+// what keeps local dev and every other test in this file working without a
+// live Neon connection. Only the "configured but unreachable" case changed.
+// ---------------------------------------------------------------------------
+describe('no NEON_DATABASE_URL still serves fixtures', () => {
+  it('getCampaignsFull serves the Finnovate fixture when no database is configured at all', async () => {
+    delete process.env.NEON_DATABASE_URL
+    const campaigns = await data.getCampaignsFull()
     expect(campaigns.length).toBe(8)
   })
 })

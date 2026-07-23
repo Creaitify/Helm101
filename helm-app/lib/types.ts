@@ -4,6 +4,16 @@ export type Direction = 'up' | 'down' | 'flat'
 export type SeriesColor = 'violet' | 'emerald' | 'sky' | 'amber' | 'rose'
 
 export interface Tenant { id: string; name: string; region: string; env: string }
+
+/**
+ * A tenant a platform admin can switch into. Deliberately distinct from
+ * `Tenant`: `Tenant.id` is the slug (display-only) and other code relies on
+ * that meaning, but the switcher needs the real UUID to send to
+ * /api/tenant/switch and compare against tenant_id in the membership table.
+ * Carrying both fields explicitly (rather than overloading Tenant.id)
+ * prevents the slug-vs-UUID confusion that once broke the switcher.
+ */
+export interface SwitchableTenant { tenantId: string; slug: string; name: string }
 export interface User { id: string; name: string; email: string; role: Role; status: 'active' | 'invited' }
 
 export interface KpiMetric { label: string; value: string; deltaLabel: string; direction: Direction; sparkline: number[]; color: SeriesColor }

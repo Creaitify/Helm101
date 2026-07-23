@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { listApprovals, decideApproval } from '@/lib/repositories/approvals'
-import { listUsers } from '@/lib/repositories/directory'
+import { listUsers, listSwitchableTenants, getTenantById } from '@/lib/repositories/directory'
 import type { TenantQueryTransaction } from '@/lib/server/tenant-context'
 
 function stubTx(rows: unknown[]) {
@@ -93,5 +93,26 @@ describe('directory repository', () => {
     expect(users[0].role).toBe('master')
     expect(users[1].role).toBe('viewer')
     expect(users[1].status).toBe('invited')
+  })
+
+  // Root cause of the tenant-switcher lockout (Critical C1): Tenant.id is
+  // the slug, but the switcher must POST a real UUID. This test uses a REAL
+  // UUID for the tenants-table id and a DISTINCT slug so slug/UUID confusion
+  // cannot hide behind equal-looking opaque strings -- unlike the fixture
+  // rows elsewhere in this file which reuse the same string for both and
+  // would pass even if the repository accidentally swapped them.
+  it('listSwitchableTenants returns the real UUID separately from the slug', async () => {
+    const uuid = '11111111-1111-1111-1111-111111111111'
+    const { tx } = stubTx([{ id: uuid, slug: 'finnovate', name: 'Finnovate' }])
+    const [tenant] = await listSwitchableTenants(tx)
+    expect(tenant.tenantId).toBe(uuid)
+    expect(tenant.slug).toBe('finnovate')
+    expect(tenant.tenantId).not.toBe(tenant.slug)
+  })
+
+  it('getTenantById still returns the slug as Tenant.id (display-only, unchanged meaning)', async () => {
+    const { tx } = stubTx([{ slug: 'finnovate', name: 'Finnovate' }])
+    const tenant = await getTenantById(tx, '11111111-1111-1111-1111-111111111111')
+    expect(tenant?.id).toBe('finnovate')
   })
 })

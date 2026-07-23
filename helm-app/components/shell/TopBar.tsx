@@ -3,7 +3,7 @@ import { Search, Bell, Moon, Plus, Menu } from 'lucide-react'
 import { useTheme } from '@/lib/theme'
 import { Button } from '@/components/ui/Button'
 import { TenantSwitcher } from '@/components/shell/TenantSwitcher'
-import type { Tenant } from '@/lib/types'
+import type { SwitchableTenant } from '@/lib/types'
 
 export function TopBar({
   onMenu = () => {},
@@ -14,7 +14,7 @@ export function TopBar({
   /** Omitted (not just empty) for callers that render TopBar with no tenant
    *  data, e.g. existing tests -- so TenantSwitcher, which unconditionally
    *  calls useRouter(), is never mounted for them. */
-  tenants?: Tenant[]
+  tenants?: SwitchableTenant[]
   activeId?: string
 }) {
   const { toggle } = useTheme()

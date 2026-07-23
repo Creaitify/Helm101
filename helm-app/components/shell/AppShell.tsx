@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { Sidebar } from './Sidebar'
 import { TopBar } from './TopBar'
 import { useTenant } from '@/lib/tenant'
-import type { Tenant } from '@/lib/types'
+import type { SwitchableTenant } from '@/lib/types'
 
 export function AppShell({
   children,
@@ -12,7 +12,7 @@ export function AppShell({
 }: {
   children: React.ReactNode
   /** Present only for a platform admin with more than one switchable tenant. */
-  switchableTenants?: Tenant[]
+  switchableTenants?: SwitchableTenant[]
   activeTenantId?: string
 }) {
   const { role } = useTenant()

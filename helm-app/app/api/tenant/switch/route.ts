@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/auth'
-import { resolveMembership } from '@/lib/server/tenant-session'
+import { resolveMembership, isUuid } from '@/lib/server/tenant-session'
 
 /**
  * Platform admins only. Stores the selected tenant in a cookie that
@@ -32,6 +32,13 @@ export async function POST(request: Request) {
 
   const { tenantId } = (await request.json()) as { tenantId?: string }
   if (!tenantId) return NextResponse.json({ error: 'tenantId required' }, { status: 400 })
+  // Defense in depth (Critical C1): tenants.id is a uuid column, and every
+  // downstream comparison (selectMembership, lookupTenantSlug) treats
+  // activeTenantId as one. The switcher now sends the real UUID, but a
+  // malformed value must never even reach the cookie -- rejecting it here
+  // means resolveMembership's own malformed-cookie guard (see
+  // lib/server/tenant-session.ts) is a backstop, not the only protection.
+  if (!isUuid(tenantId)) return NextResponse.json({ error: 'tenantId must be a UUID' }, { status: 400 })
 
   const response = NextResponse.json({ ok: true })
   response.cookies.set('helm_active_tenant', tenantId, {

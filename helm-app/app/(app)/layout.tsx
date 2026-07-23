@@ -7,7 +7,7 @@ import { NoMembershipError, UnauthenticatedError, resolveTenantSession } from '@
 import { withTenantContext } from '@/lib/server/db'
 import { getTenantById, listSwitchableTenants } from '@/lib/repositories/directory'
 import { toUiRole } from '@/lib/server/role-mapping'
-import type { Tenant } from '@/lib/types'
+import type { SwitchableTenant } from '@/lib/types'
 
 /**
  * Resolves the session exactly once (resolveTenantSession: one
@@ -24,7 +24,7 @@ import type { Tenant } from '@/lib/types'
  * the forged-cookie defense in lib/server/tenant-session.ts) -- showing the
  * control to anyone else would only invite a confusing no-op click.
  */
-async function loadShellData(): Promise<{ value?: TenantValue; switcher: { tenants?: Tenant[]; activeId?: string } }> {
+async function loadShellData(): Promise<{ value?: TenantValue; switcher: { tenants?: SwitchableTenant[]; activeId?: string } }> {
   if (!process.env.NEON_DATABASE_URL) return { switcher: {} }
   const { context, membership } = await resolveTenantSession()
   return withTenantContext(context, async (tx) => {
@@ -32,13 +32,15 @@ async function loadShellData(): Promise<{ value?: TenantValue; switcher: { tenan
     const value: TenantValue | undefined = tenant ? { tenant, role: toUiRole(context.role) } : undefined
     if (!membership.isPlatformAdmin) return { value, switcher: {} }
     const tenants = await listSwitchableTenants(tx)
-    return { value, switcher: { tenants, activeId: tenant?.id } }
+    // activeId is the real UUID (context.tenantId), matching each option's
+    // value in TenantSwitcher -- NOT tenant?.id, which is the slug.
+    return { value, switcher: { tenants, activeId: context.tenantId } }
   })
 }
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   let value: TenantValue | undefined
-  let switcher: { tenants?: Tenant[]; activeId?: string } = {}
+  let switcher: { tenants?: SwitchableTenant[]; activeId?: string } = {}
   try {
     const loaded = await loadShellData()
     value = loaded.value

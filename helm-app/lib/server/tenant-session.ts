@@ -45,6 +45,22 @@ function assertKnownRole(role: string): TenantRole {
   return role as TenantRole
 }
 
+/**
+ * Matches a well-formed UUID (any RFC 4122 version/variant, not just v4) --
+ * every id column this app compares an activeTenantId against (tenants.id,
+ * users.tenant_id) is a Postgres `uuid`. Used as defense in depth in two
+ * places: the switch route rejects a non-UUID before it is ever written to
+ * the cookie, and resolveMembershipWith treats a malformed cookie value it
+ * reads back as absent rather than letting it reach a `uuid`-typed query
+ * parameter (which would 22P02 and 500 the whole (app) layout -- see the
+ * Critical C1 fix notes on this file).
+ */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+export function isUuid(value: string): boolean {
+  return UUID_RE.test(value)
+}
+
 export interface Membership {
   tenantId: string
   tenantSlug: string
@@ -66,27 +82,28 @@ export interface QueryFn {
 }
 
 /**
- * Selects among a user's (possibly several) memberships. `users` is unique
- * on `(tenant_id, email)`, not globally unique on email, so one address can
- * legitimately hold different roles in different tenants. `rows` must
- * already be in the function's deterministic order (see migration 0008).
+ * Selects among a user's (possibly several) OWN memberships only -- it never
+ * looks at any other tenant. `users` is unique on `(tenant_id, email)`, not
+ * globally unique on email, so one address can legitimately hold different
+ * roles in different tenants. `rows` must already be in the function's
+ * deterministic order (see migration 0008).
  *
- * Precedence:
- *  1. `activeTenantId` matches one of the user's OWN memberships -> use that
- *     membership, with ITS role. Legitimate for any user, admin or not: they
- *     are a genuine member of that tenant.
- *  2. `activeTenantId` is set, doesn't match any of their own memberships,
- *     AND the user is a platform admin -> cross-tenant admin path: look up
- *     the requested tenant directly, keep the user's default membership row
- *     (first in the ordered list) for identity/role-of-record purposes but
- *     point at the requested tenant.
- *  3. Otherwise -> the first membership in the deterministic order.
+ *  - If `activeTenantId` matches one of `rows` (i.e. one of the user's own
+ *    memberships), that row is returned, with ITS role. Legitimate for any
+ *    user, admin or not: they are a genuine member of that tenant.
+ *  - Otherwise (activeTenantId unset, or set but not one of this user's own
+ *    memberships) the first row in the deterministic order is returned.
  *
- * Case 2 vs. case 4 in the brief is the forged-cookie defense: a non-admin
- * whose `activeTenantId` does not match any of their own memberships must
- * fall back to their default membership, NEVER to the requested tenant --
- * that is the only thing preventing a forged cookie from moving a normal
- * user into a tenant they do not belong to.
+ * The cross-tenant admin path -- where a platform admin's activeTenantId
+ * points at a tenant that is NOT one of their own memberships -- does not
+ * live here. It is handled by the caller, resolveMembershipWith, directly
+ * below: this function still returns the admin's own default membership row
+ * (for identity/role-of-record), and the caller then overwrites tenantId/
+ * tenantSlug via lookupTenantSlug only if isPlatformAdmin is true. That
+ * split is also the forged-cookie defense: a non-admin whose activeTenantId
+ * does not match any of their own memberships gets ONLY this function's
+ * fallback (their default membership) because the caller's isPlatformAdmin
+ * check gates the override -- never the requested tenant.
  */
 function selectMembership(rows: readonly MembershipRow[], activeTenantId: string | undefined): MembershipRow {
   const own = activeTenantId ? rows.find((r) => r.tenant_id === activeTenantId) : undefined
@@ -116,6 +133,19 @@ export async function resolveMembershipWith(
   email: string,
   activeTenantId?: string,
 ): Promise<Membership | null> {
+  // Defense in depth (Critical C1): tenants.id and users.tenant_id are both
+  // `uuid` columns. A malformed activeTenantId (e.g. a slug left over from
+  // the old switcher, or any other garbage cookie value) must degrade to
+  // "no requested tenant" here, BEFORE it can reach selectMembership's
+  // comparison or lookupTenantSlug's query parameter -- otherwise Postgres
+  // rejects it with SQLSTATE 22P02, which nothing here catches, and the
+  // whole (app) layout 500s for every request until the cookie is cleared.
+  // This is deliberately silent (no throw, no log): a stale/tampered cookie
+  // is an expected condition the app must degrade gracefully from, not an
+  // unexpected bug.
+  if (activeTenantId !== undefined && !isUuid(activeTenantId)) {
+    activeTenantId = undefined
+  }
   // users has forced RLS keyed on app.tenant_id, which cannot be set before
   // identity is known. helm_lookup_membership is a SECURITY DEFINER function
   // that exposes exactly one narrow, parameterised path -- every active
