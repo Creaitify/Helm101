@@ -418,4 +418,45 @@ describe('auth failure fails closed', () => {
     const freshData = await import('@/lib/data')
     await expect(freshData.getCampaignsFull()).rejects.toThrow('password authentication failed')
   })
+
+  // REGRESSION (round 4 CRITICAL): the previous test above mocks
+  // @/lib/server/db's `withTenantContext` entirely, so it never exercises the
+  // probe-query catch block inside the REAL withTenantContext -- the exact
+  // site that used to blanket-wrap every probe-query failure (including a
+  // reached-database SQLSTATE 28P01) into DatabaseUnreachableError, which
+  // isExpectedFallback then silently swallowed into a fixture response. This
+  // test mocks only the driver's `Pool` class (one level lower than @/lib/data
+  // vs @/lib/server/db) so the real withTenantContext -- including its
+  // assertRuntimeRoleCannotBypassRls probe-query catch -- actually runs.
+  it('does NOT reclassify a reached-database 28P01 from the RLS probe query as DatabaseUnreachableError (must fail loud, not fall back to fixtures)', async () => {
+    vi.doMock('@neondatabase/serverless', () => ({
+      Pool: class {
+        async query() {
+          throw Object.assign(new Error('password authentication failed for user "app"'), { code: '28P01' })
+        }
+        async connect(): Promise<never> {
+          throw new Error('connect() should not be reached: the probe query must fail first')
+        }
+        async end() {}
+      },
+    }))
+    await mockTenantSession({
+      requireTenantContext: async () => ({ tenantId: 't1', userId: 'u1', role: 'owner', scopes: [] }),
+    })
+    const freshDb = await import('@/lib/server/db')
+    const freshData = await import('@/lib/data')
+
+    const caught: unknown = await freshDb
+      .withTenantContext({ tenantId: 't1', userId: 'u1', role: 'owner', scopes: [] }, async () => 'unreachable')
+      .catch((e: unknown) => e)
+
+    expect(caught).not.toBeInstanceOf(freshDb.DatabaseUnreachableError)
+    expect(caught).toBeInstanceOf(Error)
+    expect((caught as Error).message).toContain('password authentication failed')
+    expect((caught as { code?: unknown }).code).toBe('28P01')
+    expect(freshData.isExpectedFallback(caught)).toBe(false)
+
+    vi.doUnmock('@neondatabase/serverless')
+    await expect(freshData.getCampaignsFull()).rejects.toThrow('password authentication failed')
+  })
 })

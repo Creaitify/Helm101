@@ -102,7 +102,13 @@ async function read<V>(work: (tx: import('../server/tenant-context').TenantQuery
     if (isNextControlFlowSignal(error)) throw error
     if (error instanceof RlsBypassError) throw error
     if (isAuthFailure(error)) throw error
-    if (isExpectedFallback(error)) return fallback
+    if (isExpectedFallback(error)) {
+      // MINOR: without this, a genuine outage (DatabaseUnreachableError) that
+      // falls back to fixtures leaves NO log line at all -- only the
+      // "unexpected error" branch below logs. One line, no per-row noise.
+      console.warn('[data] database unreachable, serving fixtures:', error instanceof Error ? error.message : error)
+      return fallback
+    }
     console.error('[data] repository read failed, serving fixtures', error)
     if (isProduction()) throw error
     return fallback
