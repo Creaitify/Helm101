@@ -1,19 +1,55 @@
+import 'server-only'
 import * as fx from './mock/fixtures'
 import type * as T from '../types'
 import type { TenantValue } from '../tenant'
+import { env } from '../server/env'
+import { UnauthenticatedError, NoMembershipError } from '../server/tenant-session'
+import { RlsBypassError } from '../server/db'
 
 const delay = <V>(v: V): Promise<V> => Promise.resolve(v) // seam: swap for fetch() later
 
 /**
+ * True in production under EITHER signal: the normalized (trimmed) HELM_ENV
+ * from lib/server/env.ts, or NODE_ENV=production, which Next sets
+ * automatically on every production build with no operator action required.
+ * Relying on HELM_ENV alone left the re-throw dead code in every real
+ * deployment, since nothing ever set it.
+ */
+function isProduction(): boolean {
+  return env.appEnv === 'production' || process.env.NODE_ENV === 'production'
+}
+
+/**
+ * True for Next.js's own internal control-flow signals -- thrown through
+ * ordinary try/catch during static prerendering (DYNAMIC_SERVER_USAGE) or a
+ * redirect (NEXT_REDIRECT) -- which must be re-thrown untouched before any
+ * other classification. They are not "expected fallback" conditions and must
+ * not be logged as unexpected bugs either: swallowing them breaks Next's
+ * routing/prerendering machinery.
+ */
+export function isNextControlFlowSignal(error: unknown): boolean {
+  const digest = (error as { digest?: unknown })?.digest
+  if (typeof digest !== 'string') return false
+  return digest === 'DYNAMIC_SERVER_USAGE' || digest.startsWith('NEXT_REDIRECT')
+}
+
+/**
  * True for the two conditions that legitimately mean "no database here":
- * an unconfigured/unreachable Neon connection, and an unauthenticated or
- * unprovisioned caller. Anything else is a real bug and must stay visible.
+ * an unconfigured/unreachable Neon connection (by Node socket error code,
+ * not message text -- Postgres error messages can embed offending row
+ * values, so message-substring matching risks misclassifying a genuine SQL
+ * error), and an unauthenticated or unprovisioned caller (by instanceof
+ * against the real exported error classes, not constructor.name, which any
+ * unrelated same-named class would satisfy). Anything else is a real bug and
+ * must stay visible.
  */
 export function isExpectedFallback(error: unknown): boolean {
-  const name = error instanceof Error ? error.constructor.name : ''
-  if (name === 'UnauthenticatedError' || name === 'NoMembershipError') return true
+  if (isNextControlFlowSignal(error)) return false
+  if (error instanceof UnauthenticatedError || error instanceof NoMembershipError) return true
+  const code = (error as NodeJS.ErrnoException)?.code
+  if (code === 'ECONNREFUSED' || code === 'ENOTFOUND') return true
   const message = error instanceof Error ? error.message : ''
-  return /Missing required server environment variable|ECONNREFUSED|ENOTFOUND|password authentication failed/i.test(message)
+  return /^Missing required server environment variable/.test(message)
 }
 
 /**
@@ -23,6 +59,10 @@ export function isExpectedFallback(error: unknown): boolean {
  *
  * A genuine query bug must never be silently indistinguishable from "no
  * database": unexpected errors are logged, and in production they throw.
+ * Next's own control-flow signals (DYNAMIC_SERVER_USAGE, NEXT_REDIRECT) are
+ * re-thrown untouched before any other classification. An RlsBypassError
+ * (misconfigured database role) always re-throws, in every environment --
+ * never falls back to fixtures.
  */
 async function read<V>(work: (tx: import('../server/tenant-context').TenantQueryTransaction) => Promise<V>, fallback: V): Promise<V> {
   if (!process.env.NEON_DATABASE_URL) return fallback
@@ -32,9 +72,11 @@ async function read<V>(work: (tx: import('../server/tenant-context').TenantQuery
     const context = await requireTenantContext()
     return await withTenantContext(context, work)
   } catch (error) {
+    if (isNextControlFlowSignal(error)) throw error
+    if (error instanceof RlsBypassError) throw error
     if (isExpectedFallback(error)) return fallback
     console.error('[data] repository read failed, serving fixtures', error)
-    if (process.env.HELM_ENV === 'production') throw error
+    if (isProduction()) throw error
     return fallback
   }
 }
@@ -69,9 +111,18 @@ export const getCampaignsFull = async (): Promise<T.CampaignFull[]> => {
   return read((tx) => listCampaigns(tx), fx.campaignsFull)
 }
 
-export const getCampaignDetail = async (id: string): Promise<T.CampaignDetail> => {
+/**
+ * Returns null (never fabricated fixture data) when the id does not resolve
+ * to a row this tenant can see -- whether because RLS correctly hid another
+ * tenant's campaign, or the id is simply unknown. The OUTER fallback
+ * argument to read() is the only legitimate "no database configured/no
+ * session" path; the inner repository result is never coerced to a fixture,
+ * since fetchCampaignDetail is a 'use server' action (a network endpoint)
+ * and the id is attacker-controlled regardless of what the UI sends.
+ */
+export const getCampaignDetail = async (id: string): Promise<T.CampaignDetail | null> => {
   const { getCampaignDetailRow } = await import('../repositories/campaigns')
-  return read(async (tx) => (await getCampaignDetailRow(tx, id)) ?? fx.campaignDetail(id), fx.campaignDetail(id))
+  return read((tx) => getCampaignDetailRow(tx, id), fx.campaignDetail(id))
 }
 
 export const getApprovals = async (): Promise<T.ApprovalItem[]> => {
@@ -138,9 +189,11 @@ export const getCurrentTenantValue = async (): Promise<TenantValue | undefined> 
       return { tenant, role: toUiRole(context.role) }
     })
   } catch (error) {
+    if (isNextControlFlowSignal(error)) throw error
+    if (error instanceof RlsBypassError) throw error
     if (isExpectedFallback(error)) return undefined
     console.error('[data] tenant value read failed', error)
-    if (process.env.HELM_ENV === 'production') throw error
+    if (isProduction()) throw error
     return undefined
   }
 }

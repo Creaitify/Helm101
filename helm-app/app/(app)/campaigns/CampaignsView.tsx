@@ -36,8 +36,11 @@ export function CampaignsView({ campaigns }: { campaigns: CampaignFull[] }) {
   }
 
   async function openDetail(id: string) {
-    setDetail(await fetchCampaignDetail(id))
+    setDetail(null) // never show a previous campaign's detail while the new one loads (or fails)
     setOpen(true)
+    const result = await fetchCampaignDetail(id)
+    setDetail(result)
+    if (!result) setOpen(false) // no data for this id: close rather than show a stale/blank pane
   }
 
   return (

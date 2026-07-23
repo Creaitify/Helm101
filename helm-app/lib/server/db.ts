@@ -24,6 +24,29 @@ export interface RoleBypassRow {
 }
 
 /**
+ * Dedicated error class for the RLS-bypass guard. Its message text does not
+ * match any pattern in lib/data's isExpectedFallback, but relying on message
+ * matching as the enforcement mechanism is fragile -- callers must instead
+ * check `instanceof RlsBypassError` and re-throw unconditionally in every
+ * environment, never falling back to fixtures. A misconfigured role that
+ * silently disables tenant isolation must never be masked by a
+ * plausible-looking fixture response.
+ */
+export class RlsBypassError extends Error {
+  readonly role: string
+  constructor(role: string) {
+    super(
+      `Refusing to serve tenant-scoped queries: the connecting database role "${role}" has ` +
+        'rolbypassrls = true, which silently disables every RLS tenant-isolation policy. ' +
+        'NEON_DATABASE_URL must authenticate as a non-bypassing runtime role (helm_app), never ' +
+        'an owner/admin role. Run `npm run db:provision-app-role` to provision it, then point ' +
+        'NEON_DATABASE_URL at that role.',
+    )
+    this.role = role
+  }
+}
+
+/**
  * Pure assertion over an already-queried pg_roles row. Kept separate from the
  * query itself so it is testable without a live database.
  *
@@ -34,13 +57,7 @@ export interface RoleBypassRow {
  */
 export function assertRoleCannotBypassRls(row: RoleBypassRow): void {
   if (row.rolbypassrls) {
-    throw new Error(
-      `Refusing to serve tenant-scoped queries: the connecting database role "${row.role}" has ` +
-        'rolbypassrls = true, which silently disables every RLS tenant-isolation policy. ' +
-        'NEON_DATABASE_URL must authenticate as a non-bypassing runtime role (helm_app), never ' +
-        'an owner/admin role. Run `npm run db:provision-app-role` to provision it, then point ' +
-        'NEON_DATABASE_URL at that role.',
-    )
+    throw new RlsBypassError(row.role)
   }
 }
 
