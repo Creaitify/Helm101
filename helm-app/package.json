@@ -10,6 +10,7 @@
     "db:migrate": "node scripts/migrate.mjs",
     "db:provision-app-role": "node scripts/provision-app-role.mjs",
     "db:seed": "node --import tsx scripts/seed.mjs",
+    "db:verify-rls": "node scripts/verify-rls.mjs",
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest"
