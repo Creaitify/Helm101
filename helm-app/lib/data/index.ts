@@ -185,26 +185,6 @@ export const getIntegrationsFull = async (): Promise<T.IntegrationDetail[]> => {
 }
 
 /**
- * Decides a pending approval (approve/reject) under tenant RLS and appends
- * the audit event, via repositories/approvals.ts's decideApproval. Requires
- * a live database and an authenticated tenant context -- there is no
- * fixture-backed fallback for a write, since fixtures have nothing to
- * durably mutate. Callers (a future 'use server' action, per Task 13's
- * optimistic-UI note in approvals.ts) must expect this to throw when no
- * database is configured or the caller is unauthenticated.
- */
-export const decideApprovalAction = async (
-  externalRef: string,
-  decision: 'approved' | 'rejected',
-): Promise<void> => {
-  const { decideApproval } = await import('../repositories/approvals')
-  const { requireTenantContext } = await import('../server/tenant-session')
-  const { withTenantContext } = await import('../server/db')
-  const context = await requireTenantContext()
-  await withTenantContext(context, (tx) => decideApproval(tx, context, { externalRef, decision }))
-}
-
-/**
  * Server-side seam for lib/tenant.tsx's TenantProvider. Resolves the
  * caller's real membership (via requireTenantContext, Task 8) and the tenant
  * row it points at (via getTenantById, Task 7), then maps the DB role to the

@@ -25,7 +25,9 @@ export function ApprovalsView({ items }: { items: ApprovalItem[] }) {
     setList((xs) => xs.filter((x) => x.id !== item.id))
     setDecided((d) => [{ item, outcome }, ...d])
     toast(`${item.action} ${outcome}`)
-    void submitApprovalDecision(item.id, outcome)
+    void submitApprovalDecision(item.id, outcome).catch(() => {
+      toast(`Failed to save ${outcome} for ${item.action} -- please retry`)
+    })
   }
   function beginEdit(item: ApprovalItem) { setEditing(item); setDraftPayload(item.payload) }
   function saveEdit() {
