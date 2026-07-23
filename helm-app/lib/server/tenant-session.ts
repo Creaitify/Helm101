@@ -6,7 +6,11 @@ import { requireServerEnv } from './env'
 import { createTenantContext, type TenantContext, type TenantRole } from './tenant-context'
 
 export class NoMembershipError extends Error {
-  constructor(email: string) { super(`No membership for ${email}`) }
+  readonly email: string
+  constructor(email: string) {
+    super('No membership for the authenticated user')
+    this.email = email
+  }
 }
 
 export class UnauthenticatedError extends Error {
@@ -22,7 +26,23 @@ const SCOPES: Record<TenantRole, readonly string[]> = {
   client_viewer: ['analytics.read'],
 }
 
+const KNOWN_ROLES = new Set(Object.keys(SCOPES))
+
 export const scopesForRole = (role: TenantRole): readonly string[] => SCOPES[role]
+
+/**
+ * Validates a role value read from the database against the known scope
+ * table, instead of trusting an unchecked cast. A future migration could add
+ * a new `helm_role` enum value without a corresponding SCOPES entry; without
+ * this check, `scopesForRole` would return `undefined` and a TenantContext
+ * with `scopes: undefined` would silently propagate downstream.
+ */
+function assertKnownRole(role: string): TenantRole {
+  if (!KNOWN_ROLES.has(role)) {
+    throw new Error(`Unknown tenant role from database: ${role}`)
+  }
+  return role as TenantRole
+}
 
 export interface Membership {
   tenantId: string
@@ -32,43 +52,116 @@ export interface Membership {
   isPlatformAdmin: boolean
 }
 
+interface MembershipRow {
+  id: string
+  tenant_id: string
+  slug: string
+  role: string
+  is_platform_admin: boolean
+}
+
+export interface QueryFn {
+  <T>(sql: string, values?: readonly unknown[]): Promise<{ rows: T[] }>
+}
+
 /**
- * Looks up an authenticated email in the users table. A missing row means no
- * access: the application never auto-provisions from an OAuth callback.
+ * Selects among a user's (possibly several) memberships. `users` is unique
+ * on `(tenant_id, email)`, not globally unique on email, so one address can
+ * legitimately hold different roles in different tenants. `rows` must
+ * already be in the function's deterministic order (see migration 0008).
+ *
+ * Precedence:
+ *  1. `activeTenantId` matches one of the user's OWN memberships -> use that
+ *     membership, with ITS role. Legitimate for any user, admin or not: they
+ *     are a genuine member of that tenant.
+ *  2. `activeTenantId` is set, doesn't match any of their own memberships,
+ *     AND the user is a platform admin -> cross-tenant admin path: look up
+ *     the requested tenant directly, keep the user's default membership row
+ *     (first in the ordered list) for identity/role-of-record purposes but
+ *     point at the requested tenant.
+ *  3. Otherwise -> the first membership in the deterministic order.
+ *
+ * Case 2 vs. case 4 in the brief is the forged-cookie defense: a non-admin
+ * whose `activeTenantId` does not match any of their own memberships must
+ * fall back to their default membership, NEVER to the requested tenant --
+ * that is the only thing preventing a forged cookie from moving a normal
+ * user into a tenant they do not belong to.
  */
+function selectMembership(rows: readonly MembershipRow[], activeTenantId: string | undefined): MembershipRow {
+  const own = activeTenantId ? rows.find((r) => r.tenant_id === activeTenantId) : undefined
+  if (own) return own
+  return rows[0]
+}
+
+async function lookupTenantSlug(query: QueryFn, tenantId: string): Promise<string | undefined> {
+  // tenants has no RLS (see db/migrations/0001_foundations.sql), so this is a
+  // direct query; excludes non-active tenants so a suspended/archived tenant
+  // is never reachable via the cross-tenant admin path.
+  const { rows } = await query<{ id: string; slug: string }>(
+    "select id, slug from tenants where id = $1 and status = 'active'",
+    [tenantId],
+  )
+  return rows[0]?.slug
+}
+
+/**
+ * Looks up an authenticated email against ALL of that email's active
+ * memberships (see migration 0008 / helm_lookup_membership). A missing row
+ * means no access: the application never auto-provisions from an OAuth
+ * callback.
+ */
+export async function resolveMembershipWith(
+  query: QueryFn,
+  email: string,
+  activeTenantId?: string,
+): Promise<Membership | null> {
+  // users has forced RLS keyed on app.tenant_id, which cannot be set before
+  // identity is known. helm_lookup_membership is a SECURITY DEFINER function
+  // that exposes exactly one narrow, parameterised path -- every active
+  // membership row for a single email, deterministically ordered -- instead
+  // of the whole table. See migration 0008 for the full rationale.
+  const { rows } = await query<MembershipRow>(
+    `select user_id as id, tenant_id, tenant_slug as slug, role, is_platform_admin
+     from helm_lookup_membership($1)`,
+    [email],
+  )
+  if (rows.length === 0) return null
+
+  const isPlatformAdmin = rows.some((r) => r.is_platform_admin)
+  const chosen = selectMembership(rows, activeTenantId)
+
+  let tenantId = chosen.tenant_id
+  let tenantSlug = chosen.slug
+  const isOwnMembership = activeTenantId ? rows.some((r) => r.tenant_id === activeTenantId) : false
+
+  // Cross-tenant admin path: only reached when activeTenantId does NOT match
+  // any of the user's own memberships (selectMembership would already have
+  // picked it otherwise) and the user is a platform admin.
+  if (activeTenantId && !isOwnMembership && isPlatformAdmin) {
+    const slug = await lookupTenantSlug(query, activeTenantId)
+    if (slug) {
+      tenantId = activeTenantId
+      tenantSlug = slug
+    }
+  }
+
+  return {
+    tenantId,
+    tenantSlug,
+    userId: chosen.id,
+    role: assertKnownRole(chosen.role),
+    isPlatformAdmin,
+  }
+}
+
 export async function resolveMembership(email: string, activeTenantId?: string): Promise<Membership | null> {
   const pool = new Pool({ connectionString: requireServerEnv('databaseUrl') })
   try {
-    // users has forced RLS keyed on app.tenant_id, which cannot be set before
-    // identity is known. helm_lookup_membership (0007) is a SECURITY DEFINER
-    // function that exposes exactly one narrow, parameterised path -- at most
-    // one row for a single email -- instead of the whole table. See that
-    // migration for the full rationale.
-    const { rows } = await pool.query(
-      `select user_id as id, tenant_id, tenant_slug as slug, role, is_platform_admin
-       from helm_lookup_membership($1)`,
-      [email],
-    )
-    const row = rows[0]
-    if (!row) return null
-
-    let tenantId = row.tenant_id as string
-    let tenantSlug = row.slug as string
-    if (activeTenantId && row.is_platform_admin) {
-      const switched = await pool.query('select id, slug from tenants where id = $1', [activeTenantId])
-      if (switched.rows[0]) {
-        tenantId = switched.rows[0].id
-        tenantSlug = switched.rows[0].slug
-      }
+    const query: QueryFn = async <T>(sql: string, values?: readonly unknown[]) => {
+      const result = await pool.query(sql, values as unknown[] | undefined)
+      return { rows: result.rows as T[] }
     }
-
-    return {
-      tenantId,
-      tenantSlug,
-      userId: row.id as string,
-      role: row.role as TenantRole,
-      isPlatformAdmin: Boolean(row.is_platform_admin),
-    }
+    return await resolveMembershipWith(query, email, activeTenantId)
   } finally {
     await pool.end()
   }
