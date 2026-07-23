@@ -97,7 +97,16 @@ describe('resolveMembershipWith', () => {
 
   it('forged-cookie defense: a non-admin with an activeTenantId that is not theirs falls back to their default membership', async () => {
     const nonAdminRow: Row = { id: 'user-2', tenant_id: 'tenant-a', slug: 'mt-a', role: 'client_viewer', is_platform_admin: false }
-    const result = await resolveMembershipWith(fakeQuery([nonAdminRow]), 'victim@example.com', 'tenant-forged')
+    // The forged target MUST be resolvable, otherwise this test passes for the
+    // wrong reason: with no matching tenant row the switch would fail on the
+    // slug lookup even if the platform-admin gate were deleted. Seeding it means
+    // the ONLY thing preventing the switch is that gate. Verified by mutation:
+    // removing `&& isPlatformAdmin` makes this test fail.
+    const result = await resolveMembershipWith(
+      fakeQuery([nonAdminRow], [{ id: 'tenant-forged', slug: 'forged-tenant' }]),
+      'victim@example.com',
+      'tenant-forged',
+    )
     expect(result?.tenantId).toBe('tenant-a')
     expect(result?.tenantSlug).toBe('mt-a')
     expect(result?.role).toBe('client_viewer')
