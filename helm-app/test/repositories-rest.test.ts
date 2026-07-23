@@ -7,7 +7,10 @@ function stubTx(rows: unknown[]) {
   const executed: { statement: string; values?: readonly unknown[] }[] = []
   const tx: TenantQueryTransaction = {
     execute: async (statement, values) => { executed.push({ statement, values }) },
-    query: async <T>() => rows as T[],
+    query: async <T>(statement: string, values?: readonly unknown[]) => {
+      executed.push({ statement, values })
+      return rows as T[]
+    },
   }
   return { tx, executed }
 }
@@ -64,12 +67,19 @@ describe('approvals repository', () => {
   })
 
   it('records a decision as a status transition, never a delete', async () => {
-    const { tx, executed } = stubTx([])
+    const { tx, executed } = stubTx([{ external_ref: 'a1' }])
     await decideApproval(tx, ctx, { externalRef: 'a1', decision: 'approved' })
     const statements = executed.map((e) => e.statement).join(' ')
     expect(statements).toContain('update approvals')
     expect(statements).not.toMatch(/delete\s+from\s+approvals/i)
     expect(statements).toContain('insert into audit_log')
+  })
+
+  it('does not fabricate an audit event when the update matches zero rows (already decided / unknown ref)', async () => {
+    const { tx, executed } = stubTx([])
+    await decideApproval(tx, ctx, { externalRef: 'a1', decision: 'approved' })
+    const statements = executed.map((e) => e.statement).join(' ')
+    expect(statements).not.toContain('insert into audit_log')
   })
 })
 

@@ -63,11 +63,35 @@ export async function decideApproval(
   context: TenantContext,
   input: { externalRef: string; decision: 'approved' | 'rejected' },
 ): Promise<void> {
-  await tx.execute(
+  // `returning` turns the update into a row-count signal: TenantTransaction.execute
+  // gives back nothing to branch on, so we use .query() and inspect what came back.
+  // The `where status = 'pending'` guard (unchanged) is what stops a second decision
+  // from overwriting the first; this addition is only about not fabricating an audit
+  // entry when that guard causes the update to match zero rows.
+  const updated = await tx.query<{ external_ref: string }>(
     `update approvals set status = $1::approval_status, decided_at = now(), decided_by = $2
-     where external_ref = $3 and status = 'pending'`,
+     where external_ref = $3 and status = 'pending'
+     returning external_ref`,
     [input.decision, context.userId, input.externalRef],
   )
+  if (updated.length === 0) {
+    // Zero rows matched means either the external_ref is unknown or the approval
+    // was already decided (by this user or another, possibly a racing double-click
+    // from the optimistic UI in Task 13). We return silently rather than throw:
+    // - Throwing would surface a "this was already decided" error to a user whose
+    //   double-click on Approve is a harmless, idempotent no-op from their point of
+    //   view -- the approval IS in the state they wanted, so failing the request
+    //   would contradict the optimistic UI that already showed success.
+    // - Silently doing nothing is safe specifically *because* we skip the audit
+    //   write below: the non-negotiable this fixes is that audit_log must never
+    //   claim a decision happened when it didn't. A no-op with no audit trail is
+    //   truthful; a no-op that still writes "approval.approved" is not.
+    // If callers ever need to distinguish "already decided" from "decided just now"
+    // (e.g. to show a toast), that's a job for a return value, not an exception --
+    // exceptions here would also fire on ordinary concurrent-approval races that
+    // aren't errors at all.
+    return
+  }
   await appendAuditEvent(tx, context, {
     actorType: 'user',
     actorId: context.userId,
