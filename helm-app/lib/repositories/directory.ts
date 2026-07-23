@@ -34,7 +34,10 @@ export async function listIntegrations(tx: TenantQueryTransaction): Promise<Inte
     status: row.status,
     scopes: row.scopes,
     // last_sync_at is a timestamptz; see approvals.ts for why UTC HH:MM is
-    // the deliberate, deterministic choice for a server-formatted instant.
+    // the deliberate, deterministic choice for a server-formatted instant
+    // (same reasoning applies here, though the seed sets this column to
+    // now() rather than anchoring it to a fixture value, so there is no
+    // fixture round-trip to preserve for this field specifically).
     lastSync: row.last_sync_at ? row.last_sync_at.toISOString().slice(11, 16) : '—',
     calls: '—',
     grad: INTEGRATION_GRAD,

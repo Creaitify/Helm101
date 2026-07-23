@@ -112,14 +112,24 @@ try {
   }
   console.log(`Campaigns -> ${fx.campaignsFull.length}`)
 
+  // fixtures.approvals[].proposedAt is a bare "HH:MM" wall-clock string with
+  // no date or zone attached. We anchor it to the same 2026-07-22 date used
+  // by campaign_metrics and interpret the wall-clock as UTC, producing an
+  // unambiguous instant for the timestamptz column. This choice is only
+  // correct if lib/repositories/approvals.ts renders proposed_at back out in
+  // UTC too (it does, see the comment there) -- that pairing is what makes a
+  // seed -> DB -> listApprovals() round trip reproduce the exact fixture
+  // string, which is the whole point of seeding FROM the fixtures.
   for (const a of fx.approvals) {
+    const proposedAt = new Date(`2026-07-22T${a.proposedAt}:00Z`)
     await client.query(
-      `insert into approvals (tenant_id, external_ref, agent, agent_code, action, summary, payload, checks, status)
-       values ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,'pending')
+      `insert into approvals (tenant_id, external_ref, agent, agent_code, action, summary, payload, checks, status, proposed_at)
+       values ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,'pending',$9)
        on conflict (tenant_id, external_ref) do update set
-         summary = excluded.summary, payload = excluded.payload, checks = excluded.checks`,
+         summary = excluded.summary, payload = excluded.payload, checks = excluded.checks,
+         proposed_at = excluded.proposed_at`,
       [tenantId, a.id, a.agent, a.agentCode, a.action, a.summary,
-       JSON.stringify({ text: a.payload }), JSON.stringify(a.checks)],
+       JSON.stringify({ text: a.payload }), JSON.stringify(a.checks), proposedAt.toISOString()],
     )
   }
   console.log(`Approvals -> ${fx.approvals.length}`)

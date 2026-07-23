@@ -43,6 +43,26 @@ describe('approvals repository', () => {
     expect(item.proposedAt).toBe('08:32')
   })
 
+  it('round-trips fixture proposedAt strings through the same UTC anchoring scripts/seed.mjs uses', async () => {
+    // Mirrors seed.mjs: fixtures.approvals[].proposedAt ("HH:MM") is anchored
+    // to 2026-07-22 and interpreted as UTC when written to proposed_at. This
+    // asserts the repository's UTC rendering is the matching half of that
+    // pairing -- the actual seed -> DB -> listApprovals() round trip is
+    // additionally verified against a live database (see task report), but
+    // this stub test pins the same contract without a DB and without
+    // depending on the machine's local timezone.
+    const fixtureTimes = { a1: '14:02', a2: '13:30', a3: '11:15' }
+    const rows = Object.entries(fixtureTimes).map(([id, hhmm]) => ({
+      external_ref: id, agent: 'Media Buyer', agent_code: 'MB', action: 'Budget shift',
+      summary: 'summary', payload: { text: 'text' }, checks: [],
+      proposed_at: new Date(`2026-07-22T${hhmm}:00Z`),
+    }))
+    const { tx } = stubTx(rows)
+    const items = await listApprovals(tx)
+    const byId = Object.fromEntries(items.map((item) => [item.id, item.proposedAt]))
+    expect(byId).toEqual(fixtureTimes)
+  })
+
   it('records a decision as a status transition, never a delete', async () => {
     const { tx, executed } = stubTx([])
     await decideApproval(tx, ctx, { externalRef: 'a1', decision: 'approved' })

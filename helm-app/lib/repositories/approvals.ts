@@ -21,8 +21,20 @@ interface ApprovalRowShape {
 // would make the same approval show a different label depending on where the
 // process happens to run — while still not being the *viewer's* local time
 // either. UTC is at least a single, stable, well-defined answer everywhere.
-// (True per-viewer local time would require formatting client-side from the
-// ISO instant, which is out of scope for this repository layer.)
+//
+// This is the other half of a deliberate pairing with scripts/seed.mjs: the
+// seed anchors each fixture's bare "HH:MM" string to 2026-07-22 and interprets
+// it as UTC when writing proposed_at. Rendering here in UTC is what makes
+// seed -> DB -> listApprovals() reproduce the exact fixture string (e.g. a1's
+// fixture "14:02" round-trips to "14:02", not some TZ-shifted value) -- that
+// round-trip fidelity is required so the DB-backed lib/data (Task 11) is
+// visually identical to the current fixture-backed one.
+//
+// If real per-viewer local-time rendering is wanted later: keep this
+// repository returning the raw ISO instant (or add an isoInstant field) and
+// do the HH:MM formatting client-side with the viewer's timezone (e.g.
+// `Intl.DateTimeFormat` using the browser's locale) instead of formatting a
+// single fixed label on the server.
 const toTimeLabel = (value: Date | string) => {
   const date = value instanceof Date ? value : new Date(value)
   return date.toISOString().slice(11, 16)
