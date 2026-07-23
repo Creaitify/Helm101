@@ -20,6 +20,7 @@ if (env.microsoftClientId && env.microsoftClientSecret) {
 export const authOptions: NextAuthOptions = {
   secret: env.authSecret,
   session: { strategy: 'jwt' },
+  pages: { signIn: '/login' },
   providers,
   callbacks: {
     session({ session, token }) {
