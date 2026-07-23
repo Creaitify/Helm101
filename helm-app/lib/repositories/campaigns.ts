@@ -23,8 +23,27 @@ const CHANNEL_COLORS: Record<string, SeriesColor> = {
 export const channelColor = (channel: string): SeriesColor => CHANNEL_COLORS[channel] ?? 'violet'
 
 const toRupees = (minor: string | number) => Math.round(Number(minor) / 100)
-const toIsoDate = (value: Date | string | null) =>
-  value === null ? '' : (value instanceof Date ? value.toISOString() : String(value)).slice(0, 10)
+
+const pad = (n: number) => String(n).padStart(2, '0')
+
+// REGRESSION (Task 6, caught via live-DB check, not by unit tests): the Neon
+// serverless driver returns a Postgres `date` column as a JS Date set to
+// LOCAL midnight, not UTC midnight. Calling `.toISOString()` on it converts
+// to UTC first, which shifts the instant backward by the local UTC offset
+// for anyone east of UTC — e.g. new Date(2026, 5, 18) (2026-06-18 00:00
+// local, UTC+5:30) becomes "2026-06-17T18:30:00.000Z", and slice(0, 10)
+// silently returns the WRONG, PREVIOUS day. Do not "simplify" this back to
+// `.toISOString().slice(0, 10)` — that reintroduces an off-by-one-day bug
+// for every non-UTC user. Always read the local Y/M/D fields instead.
+const toIsoDate = (value: Date | string | null): string => {
+  if (value === null) return ''
+  if (value instanceof Date) {
+    return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`
+  }
+  // Driver already gave us a 'YYYY-MM-DD' string (or similar) — no timezone
+  // conversion involved, so no local/UTC ambiguity to correct for.
+  return String(value).slice(0, 10)
+}
 
 function toCampaignFull(row: CampaignRowShape): CampaignFull {
   const spend = toRupees(row.spend_minor)

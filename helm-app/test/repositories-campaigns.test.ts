@@ -13,10 +13,13 @@ function stubTx(rows: unknown[]): { tx: TenantQueryTransaction; seen: string[] }
 
 describe('campaigns repository', () => {
   it('maps minor units back to display rupees and hundredths back to roas', async () => {
+    // The Neon driver returns Postgres `date` columns as a JS Date at LOCAL
+    // midnight (not UTC midnight) — new Date(2026, 5, 18) reproduces that,
+    // unlike new Date('2026-06-18T00:00:00Z') which masks a UTC-conversion bug.
     const { tx } = stubTx([{
       external_ref: 'c1', name: 'FHC · Retargeting', channel: 'Meta', status: 'active',
       objective: 'Lowest CAC / checkup', spend_minor: '15600000', budget_minor: '23000000',
-      results: 458, cac_minor: '34100', roas: 320, started_at: new Date('2026-06-18T00:00:00Z'),
+      results: 458, cac_minor: '34100', roas: 320, started_at: new Date(2026, 5, 18),
     }])
     const [campaign] = await listCampaigns(tx)
     expect(campaign.id).toBe('c1')
@@ -25,6 +28,26 @@ describe('campaigns repository', () => {
     expect(campaign.cac).toBe(341)
     expect(campaign.roas).toBe(3.2)
     expect(campaign.pacingPct).toBe(68)
+    expect(campaign.startedAt).toBe('2026-06-18')
+  })
+
+  it('formats a local-midnight Date in a different month without losing zero-padding', async () => {
+    const { tx } = stubTx([{
+      external_ref: 'c5', name: 'Spring Launch', channel: 'Google', status: 'active',
+      objective: 'Awareness', spend_minor: '0', budget_minor: '100000',
+      results: 0, cac_minor: null, roas: 0, started_at: new Date(2026, 0, 5),
+    }])
+    const [campaign] = await listCampaigns(tx)
+    expect(campaign.startedAt).toBe('2026-01-05')
+  })
+
+  it('passes through a plain YYYY-MM-DD string from the driver unchanged', async () => {
+    const { tx } = stubTx([{
+      external_ref: 'c6', name: 'String Date', channel: 'Email', status: 'active',
+      objective: 'Retention', spend_minor: '0', budget_minor: '100000',
+      results: 0, cac_minor: null, roas: 0, started_at: '2026-06-18',
+    }])
+    const [campaign] = await listCampaigns(tx)
     expect(campaign.startedAt).toBe('2026-06-18')
   })
 
