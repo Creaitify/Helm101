@@ -1,10 +1,22 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { assertReadOnlyStatement } from '@/lib/server/platform-read'
 
-const migration = readFileSync(resolve(process.cwd(), 'db/migrations/0003_operate_core.sql'), 'utf8')
-const reader = readFileSync(resolve(process.cwd(), 'db/migrations/0004_platform_reader.sql'), 'utf8')
+const migrationsDir = resolve(process.cwd(), 'db/migrations')
+const migrationFiles = readdirSync(migrationsDir)
+  .filter((file) => file.endsWith('.sql'))
+  .sort()
+// Concatenated text of every migration, in filename order. A table's
+// `create table` block and its `enable row level security` / `force row
+// level security` / `create policy` statements may live in different
+// migration files (a later migration can retrofit RLS onto a table an
+// earlier one created), so the "is this table protected" assertion below
+// must search across the whole corpus, not just the file that created it.
+const migration = migrationFiles
+  .map((file) => readFileSync(resolve(migrationsDir, file), 'utf8'))
+  .join('\n')
+const reader = readFileSync(resolve(migrationsDir, '0004_platform_reader.sql'), 'utf8')
 
 describe('tenant isolation invariants', () => {
   it('no tenant-owned table is missing forced RLS', () => {
@@ -13,15 +25,19 @@ describe('tenant isolation invariants', () => {
       const block = migration.slice(migration.indexOf(`create table ${table} (`))
       return block.slice(0, block.indexOf(');')).includes('tenant_id')
     })
+    // Derived from parsing all migration files under db/migrations, not
+    // hardcoded: as of this run it finds the tables below. If a future
+    // migration adds or removes a tenant-owned table, this list -- and the
+    // count logged with it -- changes accordingly; the test does not pin an
+    // expected count that would need separate updating.
+    // eslint-disable-next-line no-console
+    console.log(`tenant-owned tables found across ${migrationFiles.length} migration file(s): ${tenantOwned.length} -- ${tenantOwned.join(', ')}`)
+    expect(tenantOwned.length).toBeGreaterThan(0)
     for (const table of tenantOwned) {
+      expect(migration).toContain(`alter table ${table} enable row level security;`)
       expect(migration).toContain(`alter table ${table} force row level security;`)
+      expect(migration).toMatch(new RegExp(`create policy \\w+ on ${table}\\b`))
     }
-    // Verified against db/migrations/0003_operate_core.sql: campaigns,
-    // ad_groups, campaign_metrics, creatives, approvals, conversations,
-    // messages, prompt_templates -- 8 tenant-owned tables created by this
-    // migration (platform_admins is deliberately excluded: it has no
-    // tenant_id and no RLS, by design -- see migration-0003.test.ts).
-    expect(tenantOwned.length).toBe(8)
   })
 
   it('the bypass role is granted select only', () => {

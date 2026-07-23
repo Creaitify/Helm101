@@ -47,16 +47,20 @@
 //   - reuses the two tenants that already exist in the database as "tenant
 //     A" (the one with real seeded data) and "tenant B" (the tenant used as
 //     the attacking context),
-//   - inserts small fixture rows only into tables that currently have zero
-//     rows anywhere (conversations/messages/tenant_model_policies/
-//     usage_events, as of the last check), attributed to tenant A, and
-//     deletes exactly those rows again at the end,
+//   - inserts a small fixture row into any of conversations / messages /
+//     tenant_model_policies / usage_events for which TENANT A SPECIFICALLY
+//     currently has zero rows (checked with a tenant_id-filtered count, not
+//     a global one -- another tenant having rows must not suppress tenant
+//     A's fixture, or the isolation check for that table becomes vacuous),
+//     attributed to tenant A, and deletes exactly those rows again at the
+//     end,
 //   - drops the throwaway probe role at the end, if one was created.
 // Cleanup success is verified at the end of the run (see the "cleanup
 // verification" section) and printed, not just assumed.
 
 import nextEnv from '@next/env'
 import { Pool } from '@neondatabase/serverless'
+import { randomBytes } from 'node:crypto'
 
 const { loadEnvConfig } = nextEnv
 loadEnvConfig(process.cwd())
@@ -96,6 +100,7 @@ let probeRoleCreated = false
 let probeRoleName = null
 let appPool = null
 let insertedFixtureConversationId = null
+let insertedFixtureMessageId = null
 let insertedFixtureUsageEventId = null
 let insertedFixtureTenantModelPolicyTenantId = null
 let initialTenantCount = null
@@ -141,14 +146,17 @@ try {
   console.log(`Seeded email used for helm_lookup_membership probe: ${seededEmail}`)
 
   // Insert exactly one fixture row into any tenant-owned table that
-  // currently has zero rows in the ENTIRE database, so "tenant B sees zero
-  // rows of tenant A's data" is a meaningful assertion rather than trivially
-  // true because there is no data anywhere. audit_log is deliberately never
-  // touched (append-only + permanently undeletable tenant, see header).
+  // currently has zero rows FOR TENANT A SPECIFICALLY, so "tenant B sees
+  // zero rows of tenant A's data" is a meaningful assertion rather than
+  // trivially true because tenant A has no data in that table. A global
+  // (un-filtered) count would be fooled by some OTHER tenant having rows
+  // while tenant A has none -- the guard must be per-tenant, not per-table.
+  // audit_log is deliberately never touched (append-only + permanently
+  // undeletable tenant, see header).
   await owner.query('begin')
   await owner.query("select set_config('app.tenant_id', $1, true)", [a.id])
 
-  const conversationCount = await owner.query('select count(*)::int as n from conversations')
+  const conversationCount = await owner.query('select count(*)::int as n from conversations where tenant_id = $1', [a.id])
   if (conversationCount.rows[0].n === 0) {
     const convo = await owner.query(
       `insert into conversations (tenant_id, user_id, title) values ($1, $2, 'RLS verify fixture')
@@ -159,7 +167,37 @@ try {
     console.log(`Inserted fixture conversations row ${insertedFixtureConversationId} for cleanup-verified isolation check`)
   }
 
-  const usageEventCount = await owner.query('select count(*)::int as n from usage_events')
+  // messages is a child of conversations. Its own isolation policy is
+  // independent of the conversations policy (RLS is per-table), so it needs
+  // its own fixture row even when a conversations fixture already exists --
+  // otherwise the messages isolation check runs against zero rows and is
+  // vacuously true regardless of whether messages_tenant_isolation exists.
+  // Parented to insertedFixtureConversationId when we just created one, or
+  // to any existing tenant-A conversation otherwise (never inserts a
+  // conversation solely to hang a message off of it).
+  const messageCount = await owner.query('select count(*)::int as n from messages where tenant_id = $1', [a.id])
+  if (messageCount.rows[0].n === 0) {
+    let parentConversationId = insertedFixtureConversationId
+    if (!parentConversationId) {
+      const existingConvo = await owner.query(
+        'select id from conversations where tenant_id = $1 order by created_at limit 1',
+        [a.id],
+      )
+      parentConversationId = existingConvo.rows[0]?.id ?? null
+    }
+    if (!parentConversationId) {
+      fatal(`Tenant A (${a.slug}) has no conversations row to parent a messages fixture under, and none was just created.`)
+    }
+    const message = await owner.query(
+      `insert into messages (tenant_id, conversation_id, role, text) values ($1, $2, 'user', 'RLS verify fixture')
+       returning id`,
+      [a.id, parentConversationId],
+    )
+    insertedFixtureMessageId = message.rows[0].id
+    console.log(`Inserted fixture messages row ${insertedFixtureMessageId} for cleanup-verified isolation check`)
+  }
+
+  const usageEventCount = await owner.query('select count(*)::int as n from usage_events where tenant_id = $1', [a.id])
   if (usageEventCount.rows[0].n === 0) {
     const usage = await owner.query(
       `insert into usage_events (tenant_id, feature, provider, model, tokens_in, tokens_out, cost_usd)
@@ -171,7 +209,7 @@ try {
     console.log(`Inserted fixture usage_events row ${insertedFixtureUsageEventId} for cleanup-verified isolation check`)
   }
 
-  const policyCount = await owner.query('select count(*)::int as n from tenant_model_policies')
+  const policyCount = await owner.query('select count(*)::int as n from tenant_model_policies where tenant_id = $1', [a.id])
   if (policyCount.rows[0].n === 0) {
     await owner.query(
       `insert into tenant_model_policies (tenant_id) values ($1)`,
@@ -189,8 +227,8 @@ try {
     console.log('Using NEON_APP_DATABASE_URL as the role under test.')
   } else {
     console.log('NEON_APP_DATABASE_URL not set -- provisioning a temporary throwaway nobypassrls probe role.')
-    probeRoleName = `helm_rls_verify_${Math.random().toString(36).slice(2, 10)}`
-    const password = `verify_${Math.random().toString(36).slice(2)}${Date.now()}`
+    probeRoleName = `helm_rls_verify_${randomBytes(6).toString('hex')}`
+    const password = randomBytes(32).toString('base64url')
 
     const quotedIdent = probeRoleName // generated from [a-z0-9], safe as a bare identifier
     await owner.query(`create role ${quotedIdent} login nobypassrls password '${password}'`)
@@ -281,9 +319,14 @@ try {
   console.log('\nCleaning up fixtures...')
   await owner.query('begin').catch(() => {})
   try {
+    if (insertedFixtureMessageId) {
+      // Deleted explicitly (not left to conversations' on-delete-cascade) so
+      // its own cleanup is independently verified below, and so it is
+      // removed correctly even in the case where insertedFixtureConversationId
+      // is null (fixture message parented to a pre-existing conversation).
+      await owner.query('delete from messages where id = $1', [insertedFixtureMessageId])
+    }
     if (insertedFixtureConversationId) {
-      // messages cascade from conversations; none were inserted here, but
-      // the cascade delete is correct regardless.
       await owner.query('delete from conversations where id = $1', [insertedFixtureConversationId])
     }
     if (insertedFixtureUsageEventId) {
@@ -301,6 +344,10 @@ try {
 
   // Verify fixture cleanup actually took (query back, don't just assume the
   // deletes succeeded because no error was thrown).
+  if (insertedFixtureMessageId) {
+    const stillThere = await owner.query('select 1 from messages where id = $1', [insertedFixtureMessageId])
+    check('fixture messages row was actually deleted', stillThere.rowCount === 0)
+  }
   if (insertedFixtureConversationId) {
     const stillThere = await owner.query('select 1 from conversations where id = $1', [insertedFixtureConversationId])
     check('fixture conversations row was actually deleted', stillThere.rowCount === 0)
