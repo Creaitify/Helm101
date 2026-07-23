@@ -12,6 +12,31 @@ _From the 2026-07-18 final whole-branch review of `feat/operate-surfaces` (merge
 5. **Campaigns — sortable columns.** Spec §4.1/§6 call for sortable columns; the table headers are static (filter + drawer work and are tested). Add sort state + clickable headers + a `sort reorders` test. — `helm-app/app/(app)/campaigns/CampaignsView.tsx`
 6. **Campaigns — wire the drawer chart to `detail.series`.** `getCampaignDetail` returns a 14-point `series` that the drawer's `<TrendChart />` ignores (renders the static decorative chart). Drive a real mini-chart from `series`. — `helm-app/app/(app)/campaigns/CampaignsView.tsx`
 
+### Made cheaper by Phase A (still open)
+_From the Phase A ("real spine": auth + tenant-scoped data) work, tasks 1-14._
+- Item 6 (drawer chart): `campaign_metrics` now supplies a real 14-point series through
+  `getCampaignDetail().series`. The drawer still renders the static decorative chart -- wiring it
+  up is now a pure frontend change against real data, no backend work required.
+- Item 1 (Approvals edit): `approvals.payload` is now a jsonb column holding the editable
+  payload, and the approve path already writes an audited status transition through
+  `app/(app)/approvals/actions.ts`. An inline editor has real data to read and a real write path
+  to extend -- no new column or endpoint needed.
+
+### New deferrals from Phase A
+- **OAuth is not configured in this workspace.** No `AUTH_GOOGLE_ID`/`AUTH_GOOGLE_SECRET` (or
+  Entra equivalent) in `.env.local`. Sign-in, and everything downstream of a real session
+  (campaigns/approvals rendering live rows, approving in the UI), cannot be exercised end to end
+  until real OAuth credentials are provisioned. See `helm-app/docs/foundations.md`'s "Phase A:
+  what's done and what's pending" section.
+- **`NEON_DATABASE_URL` needs a one-time repoint from `neondb_owner` to `helm_app`.** The app
+  currently runs against the bypassing owner role locally; a boot-time guard
+  (`assertRuntimeRoleCannotBypassRls`) correctly refuses to serve tenant-scoped queries through it
+  rather than silently leaking data, but that also means no real data renders locally until
+  `npm run db:provision-app-role` is run and `NEON_DATABASE_URL` is repointed.
+- **Stray `probe-t` tenant** in the shared dev database cannot be deleted (`audit_log` is
+  append-only and references it). Harmless but will show up in tenant-switcher lists; only fixed
+  by recreating the database.
+
 ## Prototype (sub-project 1) — deferred
 - Mobile: sidebar is a top-stacked panel under ~820px, not a proper icon-rail/drawer (spec §5 envisioned a drawer).
 - Move remaining page-level presentational datasets (heatmap seed, gauge targets, leaderboard/approvals rows on Analytics) into `lib/data`.
