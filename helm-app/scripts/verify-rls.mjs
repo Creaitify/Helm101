@@ -42,7 +42,9 @@
 // never be deleted again (this already happened once in this project: a
 // stray `probe-t` tenant is permanently stuck in the database because of an
 // earlier probe run). This script:
-//   - never inserts into audit_log,
+//   - NEVER inserts into audit_log for a tenant it created itself (this
+//     script never creates tenants at all -- see below -- so this is
+//     automatically satisfied, not a separate runtime branch to get wrong),
 //   - never creates a new tenant,
 //   - reuses the two tenants that already exist in the database as "tenant
 //     A" (the one with real seeded data) and "tenant B" (the tenant used as
@@ -54,9 +56,28 @@
 //     A's fixture, or the isolation check for that table becomes vacuous),
 //     attributed to tenant A, and deletes exactly those rows again at the
 //     end,
+//   - for audit_log specifically: because tenant A is always a real,
+//     pre-existing, permanent tenant (never one this script created -- see
+//     the "at least 2 existing tenants" check below, which is the only
+//     source of tenant A/B and never inserts into `tenants`), a row
+//     attributed to tenant A is legitimate permanent data, not a throwaway
+//     fixture. The append-only constraint only makes rows for THROWAWAY
+//     tenants problematic (an undeletable tenant); a row for a permanent
+//     tenant is harmless. So: if tenant A currently has zero audit_log rows,
+//     this script inserts exactly one, clearly self-marked
+//     (actor_type='system', actor_id='verify-rls',
+//     action='rls.verification_probe') as an intentional, permanent
+//     verification artifact. It is NEVER deleted (cannot be -- see append-
+//     only trigger above) and the zero-rows guard makes the insert
+//     idempotent: once tenant A has a row, later runs see a non-zero
+//     per-tenant count and skip the insert, so repeated runs do not
+//     accumulate rows,
 //   - drops the throwaway probe role at the end, if one was created.
 // Cleanup success is verified at the end of the run (see the "cleanup
-// verification" section) and printed, not just assumed.
+// verification" section) and printed, not just assumed. The audit_log row is
+// the one deliberate exception to "cleanup deletes every fixture it
+// inserted" -- it is permanent by design, and the script prints exactly that
+// instead of attempting (and failing) to delete it.
 
 import nextEnv from '@next/env'
 import { Pool } from '@neondatabase/serverless'
@@ -104,6 +125,7 @@ let insertedFixtureMessageId = null
 let insertedFixtureUsageEventId = null
 let insertedFixtureTenantModelPolicyTenantId = null
 let initialTenantCount = null
+let insertedPermanentAuditLogForTenantId = null
 
 let fatalError = null
 
@@ -130,6 +152,14 @@ try {
     (x, y) => (countByTenant.get(y.id) ?? 0) - (countByTenant.get(x.id) ?? 0),
   )
   const [a, b] = ranked
+  // Safety guarantee for the audit_log fixture below: tenant A and tenant B
+  // are both drawn exclusively from `tenants.rows`, which was read from the
+  // database BEFORE this script ever runs any insert/create statement --
+  // this script has, at this point, created neither a tenant nor anything
+  // else. `preExistingTenantIds` freezes that set of ids so the audit_log
+  // insert further down can assert against it rather than merely trusting
+  // "we never call insert into tenants" by convention.
+  const preExistingTenantIds = new Set(tenants.rows.map((t) => t.id))
   console.log(`Tenant A (attacked, expected to have real data) = ${a.slug} (${a.id})`)
   console.log(`Tenant B (attacking context)                    = ${b.slug} (${b.id})`)
 
@@ -217,6 +247,49 @@ try {
     )
     insertedFixtureTenantModelPolicyTenantId = a.id
     console.log(`Inserted fixture tenant_model_policies row for tenant ${a.id} for cleanup-verified isolation check`)
+  }
+
+  // audit_log: append-only, so this is NOT a throwaway fixture -- it is a
+  // permanent row that will outlive this script run. It is only safe to
+  // write because tenant A is guaranteed to be a real, pre-existing,
+  // permanent tenant (see preExistingTenantIds above); writing an audit_log
+  // row for a tenant this script itself created would make that tenant
+  // permanently undeletable, which must never happen. Assert that guarantee
+  // explicitly rather than relying on "this script has no create-tenant code
+  // path" as the only line of defense.
+  if (!preExistingTenantIds.has(a.id)) {
+    fatal(
+      `Refusing to insert an audit_log row for tenant ${a.id}: it is not in the set of tenants that ` +
+        'existed before this script ran any insert. audit_log is append-only, so writing a row for a ' +
+        'tenant this script created itself would make that tenant permanently undeletable.',
+    )
+  }
+  const auditLogCount = await owner.query('select count(*)::int as n from audit_log where tenant_id = $1', [a.id])
+  if (auditLogCount.rows[0].n === 0) {
+    await owner.query(
+      `insert into audit_log (tenant_id, actor_type, actor_id, action, target, metadata)
+       values ($1, 'system', 'verify-rls', 'rls.verification_probe', 'verify-rls', $2::jsonb)`,
+      [
+        a.id,
+        JSON.stringify({
+          note: 'Intentional, permanent verification artifact created by scripts/verify-rls.mjs.',
+          reason:
+            'audit_log is append-only; this row makes the audit_log isolation check non-vacuous for a ' +
+            'real, permanent tenant. It is never deleted and re-runs will not create additional rows ' +
+            '(guarded by a per-tenant zero-rows check).',
+        }),
+      ],
+    )
+    insertedPermanentAuditLogForTenantId = a.id
+    console.log(
+      `Inserted PERMANENT audit_log row for tenant ${a.slug} (${a.id}) -- audit_log is append-only, ` +
+        'this row is never deleted, and is safe/intentional because tenant A is a real, pre-existing tenant.',
+    )
+  } else {
+    console.log(
+      `Tenant ${a.slug} (${a.id}) already has ${auditLogCount.rows[0].n} audit_log row(s) -- no fixture insert needed, ` +
+        'existing data already makes the audit_log isolation check non-vacuous.',
+    )
   }
 
   await owner.query('commit')
@@ -359,6 +432,21 @@ try {
   if (insertedFixtureTenantModelPolicyTenantId) {
     const stillThere = await owner.query('select 1 from tenant_model_policies where tenant_id = $1', [insertedFixtureTenantModelPolicyTenantId])
     check('fixture tenant_model_policies row was actually deleted', stillThere.rowCount === 0)
+  }
+
+  // audit_log is append-only -- this row is NOT deleted (deletion would fail
+  // via the audit_log_no_update trigger, and is not desired: it is a
+  // permanent, intentional artifact for a real tenant, not a throwaway
+  // fixture). Report its status instead of attempting cleanup.
+  if (insertedPermanentAuditLogForTenantId) {
+    console.log(
+      `NOTE: one PERMANENT audit_log row remains for tenant ${insertedPermanentAuditLogForTenantId} ` +
+        '(action=rls.verification_probe). This is intentional -- audit_log is append-only and this row ' +
+        'is for a real, permanent tenant, so it is safe and will not accumulate on future runs (the ' +
+        'insert is guarded by a per-tenant zero-rows check).',
+    )
+  } else {
+    console.log('NOTE: tenant A already had audit_log row(s) before this run -- no new permanent row was inserted.')
   }
 
   if (appPool) await appPool.end().catch(() => {})
