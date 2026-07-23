@@ -1,44 +1,48 @@
 import { redirect } from 'next/navigation'
-import { getServerSession } from 'next-auth'
 import { TenantProvider, type TenantValue } from '@/lib/tenant'
 import { ApprovalsProvider } from '@/lib/approvals'
 import { ToastProvider } from '@/components/ui/Toast'
 import { AppShell } from '@/components/shell/AppShell'
-import { getCurrentTenantValue } from '@/lib/data/tenant-value'
-import { authOptions } from '@/auth'
-import { NoMembershipError, UnauthenticatedError, resolveMembership, requireTenantContext } from '@/lib/server/tenant-session'
+import { NoMembershipError, UnauthenticatedError, resolveTenantSession } from '@/lib/server/tenant-session'
 import { withTenantContext } from '@/lib/server/db'
 import { getTenantById, listSwitchableTenants } from '@/lib/repositories/directory'
+import { toUiRole } from '@/lib/server/role-mapping'
 import type { Tenant } from '@/lib/types'
 
 /**
- * Only a platform admin ever sees a non-empty list: resolveMembership
- * already refuses to honour a switch request from anyone else (see the
- * forged-cookie defense in lib/server/tenant-session.ts), so showing the
- * control to a non-admin would only invite a confusing no-op click.
- * Kept local to this layout rather than added to lib/data's public surface,
- * since it has exactly one caller.
+ * Resolves the session exactly once (resolveTenantSession: one
+ * getServerSession + one resolveMembership call) and, in the SAME
+ * transaction, reads everything both the tenant shell and the admin-only
+ * tenant switcher need. Previously this layout called getCurrentTenantValue()
+ * and a local getSwitcherProps() independently, each re-doing
+ * getServerSession + resolveMembership + requireTenantContext from scratch --
+ * three extra round trips per request, and a window where the two calls
+ * could observe different membership state (e.g. a switch landing between
+ * them). A missing NEON_DATABASE_URL still falls back to the shell's default
+ * (Finnovate/master) so local dev without a live Neon connection keeps
+ * working; only a platform admin ever gets a non-empty switcher list (see
+ * the forged-cookie defense in lib/server/tenant-session.ts) -- showing the
+ * control to anyone else would only invite a confusing no-op click.
  */
-async function getSwitcherProps(): Promise<{ tenants?: Tenant[]; activeId?: string }> {
-  const session = await getServerSession(authOptions)
-  const email = session?.user?.email
-  if (!email) return {}
-  const membership = await resolveMembership(email)
-  if (!membership?.isPlatformAdmin) return {}
-  const context = await requireTenantContext()
-  const [tenants, activeTenant] = await withTenantContext(context, async (tx) => [
-    await listSwitchableTenants(tx),
-    await getTenantById(tx, context.tenantId),
-  ] as const)
-  return { tenants, activeId: activeTenant?.id }
+async function loadShellData(): Promise<{ value?: TenantValue; switcher: { tenants?: Tenant[]; activeId?: string } }> {
+  if (!process.env.NEON_DATABASE_URL) return { switcher: {} }
+  const { context, membership } = await resolveTenantSession()
+  return withTenantContext(context, async (tx) => {
+    const tenant = await getTenantById(tx, context.tenantId)
+    const value: TenantValue | undefined = tenant ? { tenant, role: toUiRole(context.role) } : undefined
+    if (!membership.isPlatformAdmin) return { value, switcher: {} }
+    const tenants = await listSwitchableTenants(tx)
+    return { value, switcher: { tenants, activeId: tenant?.id } }
+  })
 }
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   let value: TenantValue | undefined
   let switcher: { tenants?: Tenant[]; activeId?: string } = {}
   try {
-    value = await getCurrentTenantValue()
-    if (value) switcher = await getSwitcherProps()
+    const loaded = await loadShellData()
+    value = loaded.value
+    switcher = loaded.switcher
   } catch (error) {
     // Task 9 built /no-access but nothing routed to it yet; this is that
     // route. Middleware already keeps a fully unauthenticated request from

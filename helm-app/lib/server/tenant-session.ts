@@ -168,6 +168,11 @@ export async function resolveMembership(email: string, activeTenantId?: string):
   }
 }
 
+export interface TenantSession {
+  context: Readonly<TenantContext>
+  membership: Membership
+}
+
 /**
  * Reads the `helm_active_tenant` cookie set by POST /api/tenant/switch and
  * passes it through to resolveMembership as the requested activeTenantId.
@@ -175,8 +180,14 @@ export async function resolveMembership(email: string, activeTenantId?: string):
  * honoured -- see selectMembership above for the full precedence, and note
  * in particular the forged-cookie defense: a non-admin's cookie pointing at
  * a tenant that is not their own is silently ignored there, not here.
+ *
+ * Returns the full Membership alongside the derived TenantContext so a
+ * single caller needing both (e.g. the (app) layout, which needs the
+ * TenantContext for tenant-scoped reads AND membership.isPlatformAdmin to
+ * decide whether to show the tenant switcher) can resolve the session
+ * exactly once instead of once per need.
  */
-export async function requireTenantContext(): Promise<Readonly<TenantContext>> {
+export async function resolveTenantSession(): Promise<TenantSession> {
   const session = await getServerSession(authOptions)
   const email = session?.user?.email
   if (!email) throw new UnauthenticatedError()
@@ -184,10 +195,22 @@ export async function requireTenantContext(): Promise<Readonly<TenantContext>> {
   const activeTenantId = store.get('helm_active_tenant')?.value
   const membership = await resolveMembership(email, activeTenantId)
   if (!membership) throw new NoMembershipError(email)
-  return createTenantContext({
+  const context = createTenantContext({
     tenantId: membership.tenantId,
     userId: membership.userId,
     role: membership.role,
     scopes: scopesForRole(membership.role),
   })
+  return { context, membership }
+}
+
+/**
+ * Convenience wrapper over resolveTenantSession for the common case where
+ * only the TenantContext is needed. Kept as the primary export used by
+ * repositories' single-purpose reads/writes (lib/data, the tenant-switch
+ * route) so they don't need to know about Membership at all.
+ */
+export async function requireTenantContext(): Promise<Readonly<TenantContext>> {
+  const { context } = await resolveTenantSession()
+  return context
 }

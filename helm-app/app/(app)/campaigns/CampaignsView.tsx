@@ -1,7 +1,7 @@
 'use client'
 import { useState, useMemo } from 'react'
 import type { CampaignFull, CampaignDetail } from '@/lib/types'
-import { getCampaignDetail } from '@/lib/data'
+import { fetchCampaignDetail } from './actions'
 import { Card } from '@/components/ui/Card'
 import { StatusPill } from '@/components/ui/StatusPill'
 import { Button } from '@/components/ui/Button'
@@ -36,7 +36,7 @@ export function CampaignsView({ campaigns }: { campaigns: CampaignFull[] }) {
   }
 
   async function openDetail(id: string) {
-    setDetail(await getCampaignDetail(id))
+    setDetail(await fetchCampaignDetail(id))
     setOpen(true)
   }
 
