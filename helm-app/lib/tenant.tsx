@@ -2,10 +2,18 @@
 import { createContext, useContext, ReactNode } from 'react'
 import type { Tenant, Role } from './types'
 
-const CURRENT: { tenant: Tenant; role: Role } = {
+export interface TenantValue { tenant: Tenant; role: Role }
+
+/** Fallback for tests and for local development without a database. */
+const FALLBACK: TenantValue = {
   tenant: { id: 'finnovate', name: 'Finnovate', region: 'ap-south-1', env: 'prod' },
   role: 'master',
 }
-const Ctx = createContext(CURRENT)
-export function TenantProvider({ children }: { children: ReactNode }) { return <Ctx.Provider value={CURRENT}>{children}</Ctx.Provider> }
+
+const Ctx = createContext<TenantValue>(FALLBACK)
+
+export function TenantProvider({ value, children }: { value?: TenantValue; children: ReactNode }) {
+  return <Ctx.Provider value={value ?? FALLBACK}>{children}</Ctx.Provider>
+}
+
 export const useTenant = () => useContext(Ctx)

@@ -28,3 +28,13 @@ export const getBriefDefaults = () => delay<T.Brief>(fx.briefDefaults)
 export const getPromptTemplates = () => delay<T.PromptTemplate[]>(fx.promptTemplates)
 export const getApprovals = () => delay<T.ApprovalItem[]>(fx.approvals)
 export const getIntegrationsFull = () => delay<T.IntegrationDetail[]>(fx.integrationsFull)
+
+// getCurrentTenantValue is NOT exported from this barrel (see ./tenant-value.ts
+// for why): this file is imported by client components (e.g.
+// CampaignsView.tsx via `@/lib/data`), and even a type-only re-export here
+// pulls the whole module graph -- including tenant-session's next-auth /
+// next/headers / @neondatabase/serverless imports -- into the client bundle,
+// which fails `next build` ("'server-only' cannot be imported from a Client
+// Component module"). Import getCurrentTenantValue from '@/lib/data/tenant-value'
+// directly; this is a deliberate deviation from the brief's `from '@/lib/data'`
+// import path, required to keep the existing client-imported barrel intact.

@@ -1,5 +1,6 @@
 import 'server-only'
 import { getServerSession } from 'next-auth'
+import { cookies } from 'next/headers'
 import { Pool } from '@neondatabase/serverless'
 import { authOptions } from '@/auth'
 import { requireServerEnv } from './env'
@@ -167,13 +168,21 @@ export async function resolveMembership(email: string, activeTenantId?: string):
   }
 }
 
-// Task 10 Step 7 replaces this body to read the active-tenant cookie. The
-// signature is argument-free from the start so no caller ever has to change.
+/**
+ * Reads the `helm_active_tenant` cookie set by POST /api/tenant/switch and
+ * passes it through to resolveMembership as the requested activeTenantId.
+ * resolveMembership is the sole authority on whether that request is
+ * honoured -- see selectMembership above for the full precedence, and note
+ * in particular the forged-cookie defense: a non-admin's cookie pointing at
+ * a tenant that is not their own is silently ignored there, not here.
+ */
 export async function requireTenantContext(): Promise<Readonly<TenantContext>> {
   const session = await getServerSession(authOptions)
   const email = session?.user?.email
   if (!email) throw new UnauthenticatedError()
-  const membership = await resolveMembership(email)
+  const store = await cookies()
+  const activeTenantId = store.get('helm_active_tenant')?.value
+  const membership = await resolveMembership(email, activeTenantId)
   if (!membership) throw new NoMembershipError(email)
   return createTenantContext({
     tenantId: membership.tenantId,
