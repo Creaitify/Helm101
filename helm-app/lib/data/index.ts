@@ -4,7 +4,7 @@ import type * as T from '../types'
 import type { TenantValue } from '../tenant'
 import { env } from '../server/env'
 import { UnauthenticatedError, NoMembershipError } from '../server/tenant-session'
-import { RlsBypassError } from '../server/db'
+import { RlsBypassError, DatabaseUnreachableError } from '../server/db'
 
 const delay = <V>(v: V): Promise<V> => Promise.resolve(v) // seam: swap for fetch() later
 
@@ -34,35 +34,6 @@ export function isNextControlFlowSignal(error: unknown): boolean {
 }
 
 /**
- * Node socket-level errno codes that indicate "could not reach a database at
- * all" (as opposed to a database that responded with a SQL/auth error).
- */
-const EXPECTED_SOCKET_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'ETIMEDOUT', 'EAI_AGAIN'])
-
-/**
- * True when `error` is the @neondatabase/serverless driver's connect-failure
- * wrapper: `new Error('Error connecting to database: ' + e)` with
- * `.sourceError = e` set to the underlying transport error. The driver never
- * puts a Node errno on the wrapper's own `.code` -- that field is reused by
- * NeonDbError (a DIFFERENT class, thrown for actual SQL errors) to carry the
- * Postgres SQLSTATE, e.g. '42703' for an undefined column. Reading `.code`
- * off an arbitrary error would therefore risk comparing a SQLSTATE against
- * Node errno constants -- structurally the same message-substring-style
- * misclassification this function exists to avoid. So the wrapper shape is
- * verified first (message prefix OR presence of `.sourceError`), and only
- * then is the INNER `sourceError.code` inspected.
- */
-function connectFailureErrnoCode(error: unknown): string | undefined {
-  if (!(error instanceof Error)) return undefined
-  const sourceError = (error as { sourceError?: { code?: unknown } }).sourceError
-  const looksLikeConnectWrapper =
-    /^Error connecting to database:/.test(error.message) || sourceError !== undefined
-  if (!looksLikeConnectWrapper) return undefined
-  const code = sourceError?.code
-  return typeof code === 'string' ? code : undefined
-}
-
-/**
  * True for Postgres SQLSTATEs meaning the credentials themselves were
  * rejected: 28P01 (invalid_password) and 28000
  * (invalid_authorization_specification). Read off NeonDbError's top-level
@@ -70,18 +41,27 @@ function connectFailureErrnoCode(error: unknown): string | undefined {
  * password is a fail-loud condition (see isAuthFailure's caller), never an
  * "expected fallback" -- silently serving fixtures for a wrong credential
  * hides the misconfiguration from whoever is looking at it.
+ *
+ * Gated on `error instanceof Error` first (finding I1): without that guard,
+ * an arbitrary non-Error object carrying an incidental `.code === '28P01'`
+ * property (e.g. a mock, or an unrelated structured value) would trigger the
+ * unconditional fail-loud throw below, even though it is not really a
+ * Postgres auth rejection.
  */
 export function isAuthFailure(error: unknown): boolean {
-  const code = (error as { code?: unknown })?.code
+  if (!(error instanceof Error)) return false
+  const code = (error as { code?: unknown }).code
   return code === '28P01' || code === '28000'
 }
 
 /**
- * True for the conditions that legitimately mean "no database here": an
- * unconfigured/unreachable Neon connection (by the wrapped socket errno --
- * see connectFailureErrnoCode -- never by message-substring matching, since
- * Postgres error messages can embed offending row values and risk
- * misclassifying a genuine SQL error), and an unauthenticated or
+ * True for the conditions that legitimately mean "no database here": the
+ * database was unreachable (DatabaseUnreachableError, thrown by
+ * lib/server/db.ts at the pool.connect()/probe-query boundary -- the only
+ * place connection state is actually knowable; this app's `Pool` WebSocket
+ * driver delivers real connect failures as an undifferentiated `ErrorEvent`
+ * with no message and no code, so there is nothing to structurally sniff
+ * downstream, and no attempt is made to), and an unauthenticated or
  * unprovisioned caller (by instanceof against the real exported error
  * classes, not constructor.name, which any unrelated same-named class would
  * satisfy). An authentication failure is deliberately NOT included here --
@@ -92,7 +72,7 @@ export function isExpectedFallback(error: unknown): boolean {
   if (isNextControlFlowSignal(error)) return false
   if (isAuthFailure(error)) return false
   if (error instanceof UnauthenticatedError || error instanceof NoMembershipError) return true
-  if (EXPECTED_SOCKET_CODES.has(connectFailureErrnoCode(error) ?? '')) return true
+  if (error instanceof DatabaseUnreachableError) return true
   const message = error instanceof Error ? error.message : ''
   return /^Missing required server environment variable/.test(message)
 }

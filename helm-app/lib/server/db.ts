@@ -7,12 +7,62 @@ function createPool() {
   return new Pool({ connectionString: requireServerEnv('databaseUrl') })
 }
 
+/**
+ * Thrown whenever the database could not be reached at all -- connection
+ * refused, DNS failure, TLS failure, timeout, or a dropped socket. This app
+ * uses the `Pool` (WebSocket) driver, NOT the `neon()` HTTP driver: a real
+ * connect failure on this path does not arrive as a `NeonDbError` or even as
+ * an `Error` with a `.code`/`.sourceError` -- it arrives as a raw
+ * `ErrorEvent` with an empty message and no distinguishing fields at all
+ * (verified directly against the installed driver; see task-11-fix3-report).
+ * Structural sniffing of that shape downstream is impossible, so it is never
+ * attempted: instead, the failure is classified HERE, at the one place the
+ * connection state is actually known -- inside the try/catch wrapping
+ * `pool.connect()` -- and re-thrown as this typed error. Callers (lib/data)
+ * classify it with a plain `instanceof` check, exactly like RlsBypassError.
+ */
+export class DatabaseUnreachableError extends Error {
+  constructor(cause: unknown) {
+    super('Could not reach the database (connection refused, DNS/TLS failure, or timeout)', { cause })
+  }
+}
+
+/**
+ * Plain-`Error` transport failures the Pool driver can throw from
+ * `pool.connect()` that are NOT delivered as an `ErrorEvent` (verified
+ * against the installed driver bundle). These are distinctive message
+ * prefixes, not SQL error text, so matching on them here -- at the same
+ * connect() boundary as the ErrorEvent case, not by sniffing an arbitrary
+ * downstream error -- is safe.
+ */
+const TRANSPORT_FAILURE_MESSAGES = [
+  'There was an error establishing an SSL connection',
+  'timeout expired',
+  'Connection terminated unexpectedly',
+  'Cannot use a pool after calling end on the pool',
+]
+
+function isTransportFailure(error: unknown): boolean {
+  if (!(error instanceof Error)) return true // ErrorEvent and friends: not an Error instance at all
+  return TRANSPORT_FAILURE_MESSAGES.some((prefix) => error.message.startsWith(prefix))
+}
+
+async function connectOrThrowUnreachable(pool: Pool) {
+  try {
+    return await pool.connect()
+  } catch (error) {
+    throw new DatabaseUnreachableError(error)
+  }
+}
+
 export async function checkDatabaseConnection() {
   if (!env.databaseUrl) return { configured: false, connected: false }
   const pool = createPool()
   try {
     await pool.query('select 1 as connected')
     return { configured: true, connected: true }
+  } catch (error) {
+    throw new DatabaseUnreachableError(error)
   } finally {
     await pool.end()
   }
@@ -97,6 +147,21 @@ export async function assertRuntimeRoleCannotBypassRls(pool: Pool): Promise<void
 /**
  * Runs work in a Neon transaction after establishing transaction-local RLS
  * context. Repositories receive only this scoped transaction, not a global DB.
+ *
+ * Connection-establishment failures (assertRuntimeRoleCannotBypassRls's
+ * probe query, and pool.connect() itself) are classified as
+ * DatabaseUnreachableError HERE, at the boundary where "we never got a
+ * connection" is knowable from position -- not by inspecting the error's
+ * shape, which for this driver's WebSocket transport is an undifferentiated
+ * `ErrorEvent` with no message and no code (see DatabaseUnreachableError's
+ * doc comment). A failure from `client.query(...)` AFTER a connection was
+ * successfully established is deliberately NOT reclassified: a SQL error
+ * (bad column, constraint violation, etc.) on an already-open connection is
+ * a real bug, not "no database here," and must keep propagating as-is so it
+ * stays visible instead of being silently treated as a fallback-worthy
+ * outage. The one exception is a mid-transaction transport failure (the
+ * driver's plain-Error `TRANSPORT_FAILURE_MESSAGES`, e.g. a dropped
+ * connection) -- arguably still "unreachable," so it is reclassified too.
  */
 export async function withTenantContext<T>(
   input: TenantContext,
@@ -104,8 +169,18 @@ export async function withTenantContext<T>(
 ): Promise<T> {
   const context = createTenantContext(input)
   const pool = createPool()
-  await assertRuntimeRoleCannotBypassRls(pool)
-  const client = await pool.connect()
+  try {
+    await assertRuntimeRoleCannotBypassRls(pool)
+  } catch (error) {
+    await pool.end().catch(() => {})
+    // RlsBypassError is a real, successfully-queried result (the role WAS
+    // reached; it just fails the bypass check) -- never mask it as
+    // "unreachable." Everything else here means the probe query itself
+    // could not run, i.e. the database was unreachable.
+    if (error instanceof RlsBypassError) throw error
+    throw new DatabaseUnreachableError(error)
+  }
+  const client = await connectOrThrowUnreachable(pool)
   try {
     await client.query('begin')
     const tx: TenantQueryTransaction = {
@@ -125,7 +200,10 @@ export async function withTenantContext<T>(
     await client.query('commit')
     return result
   } catch (error) {
-    await client.query('rollback')
+    await client.query('rollback').catch(() => {})
+    if (isTransportFailure(error) && !(error instanceof DatabaseUnreachableError)) {
+      throw new DatabaseUnreachableError(error)
+    }
     throw error
   } finally {
     client.release()

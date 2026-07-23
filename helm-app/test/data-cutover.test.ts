@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import * as data from '@/lib/data'
 import { UnauthenticatedError, NoMembershipError } from '@/lib/server/tenant-session'
+import { DatabaseUnreachableError } from '@/lib/server/db'
 
 // MINOR G: a shared mock factory that re-exports the REAL RlsBypassError (via
 // importActual) instead of each call site redeclaring `class extends Error
@@ -10,6 +11,21 @@ import { UnauthenticatedError, NoMembershipError } from '@/lib/server/tenant-ses
 async function mockDb(overrides: Record<string, unknown>) {
   const actual = await vi.importActual<typeof import('@/lib/server/db')>('@/lib/server/db')
   vi.doMock('@/lib/server/db', () => ({
+    ...actual,
+    ...overrides,
+  }))
+}
+
+// MINOR M3: same shared-mock-factory issue as mockDb above, but for
+// @/lib/server/tenant-session -- most call sites redeclare
+// UnauthenticatedError/NoMembershipError as fresh `class extends Error {}`,
+// which is a DIFFERENT class object than the one lib/data/index.ts imports,
+// so `instanceof` against the real classes would silently be false there.
+// Re-exports the REAL classes via importActual, only overriding
+// requireTenantContext (and anything else the test needs to stub).
+async function mockTenantSession(overrides: Record<string, unknown>) {
+  const actual = await vi.importActual<typeof import('@/lib/server/tenant-session')>('@/lib/server/tenant-session')
+  vi.doMock('@/lib/server/tenant-session', () => ({
     ...actual,
     ...overrides,
   }))
@@ -48,24 +64,17 @@ describe('fallback classification', () => {
     expect(isExpectedFallback(new NoMembershipError('a@b.com'))).toBe(true)
   })
 
-  // CRITICAL A: the driver never sets a Node errno on a top-level `.code` --
-  // that field is reused by NeonDbError to carry the Postgres SQLSTATE. The
-  // real connect-failure shape (verified against
-  // node_modules/@neondatabase/serverless/index.js) is:
-  //   new Error('Error connecting to database: ' + e); err.sourceError = e
-  // with the Node errno on the INNER sourceError.code.
-  it('treats a real Neon connect-failure wrapper (sourceError.code) as expected', async () => {
+  // CRITICAL (round 3): this app uses the Pool (WebSocket) driver, not
+  // neon(). A real unreachable-database failure never arrives with a
+  // sourceError/errno shape at all -- verified directly against the
+  // installed driver (see task-11-fix3-report): it surfaces as a raw
+  // ErrorEvent with no message and no code. There is nothing to structurally
+  // sniff downstream, so classification happens at the lib/server/db.ts
+  // pool.connect() boundary instead, which re-throws a typed
+  // DatabaseUnreachableError. isExpectedFallback need only check instanceof.
+  it('treats DatabaseUnreachableError as expected (falls back to fixtures)', async () => {
     const { isExpectedFallback } = await import('@/lib/data')
-    const econnrefused = Object.assign(
-      new Error('Error connecting to database: connect ECONNREFUSED 127.0.0.1:5432'),
-      { sourceError: Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:5432'), { code: 'ECONNREFUSED' }) },
-    )
-    expect(isExpectedFallback(econnrefused)).toBe(true)
-    const enotfound = Object.assign(
-      new Error('Error connecting to database: getaddrinfo ENOTFOUND example.invalid'),
-      { sourceError: Object.assign(new Error('getaddrinfo ENOTFOUND example.invalid'), { code: 'ENOTFOUND' }) },
-    )
-    expect(isExpectedFallback(enotfound)).toBe(true)
+    expect(isExpectedFallback(new DatabaseUnreachableError(new Error('connect failed')))).toBe(true)
   })
 
   it('does NOT swallow a genuine query bug', async () => {
@@ -74,22 +83,14 @@ describe('fallback classification', () => {
     expect(isExpectedFallback(new Error('syntax error at or near "slect"'))).toBe(false)
   })
 
-  // CRITICAL A (part 2): a NeonDbError-shaped error carrying a top-level
-  // SQLSTATE on `.code` (e.g. '42703' undefined column) must NOT be
-  // classified as expected merely because it happens to have a `.code`
-  // property -- that would be the same class of bug as message-substring
-  // matching, displaced onto the wrong field.
-  it('does NOT classify a NeonDbError-shaped SQLSTATE error as expected', async () => {
+  // A plain-Error SQL error (SQLSTATE 42703, undefined column) carried on a
+  // top-level `.code`, exactly like NeonDbError documents, must NOT be
+  // classified as expected merely because it has a `.code` property -- only
+  // a real DatabaseUnreachableError (thrown at the connection boundary)
+  // counts.
+  it('does NOT classify a plain SQLSTATE 42703 SQL error as expected', async () => {
     const { isExpectedFallback } = await import('@/lib/data')
-    class NeonDbError extends Error {
-      code: string | undefined
-      constructor(message: string, code: string) {
-        super(message)
-        this.name = 'NeonDbError'
-        this.code = code
-      }
-    }
-    const undefinedColumn = new NeonDbError('column "spend_minor" does not exist', '42703')
+    const undefinedColumn = Object.assign(new Error('column "spend_minor" does not exist'), { code: '42703' })
     expect(isExpectedFallback(undefinedColumn)).toBe(false)
   })
 
@@ -143,7 +144,7 @@ describe('fallback classification', () => {
   // IMPORTANT B: a bad DB password must fail loud, not be silently answered
   // with a fully-populated fixture UI. Postgres SQLSTATE 28P01
   // (invalid_password) / 28000 (invalid_authorization_specification) is
-  // read off NeonDbError's top-level `.code` -- a structural check, not
+  // read off the error's top-level `.code` -- a structural check, not
   // message-substring matching.
   it('classifies a SQLSTATE 28P01/28000 auth failure as NOT expected-fallback (must fail loud)', async () => {
     const { isExpectedFallback, isAuthFailure } = (await import('@/lib/data')) as unknown as {
@@ -157,6 +158,20 @@ describe('fallback classification', () => {
     expect(isExpectedFallback(badPassword)).toBe(false)
     expect(isExpectedFallback(badAuthSpec)).toBe(false)
     expect(isAuthFailure(new Error('column "spend_minor" does not exist'))).toBe(false)
+  })
+
+  // Finding I1: isAuthFailure must be gated on `error instanceof Error`
+  // before reading `.code` -- otherwise an arbitrary non-Error object (e.g.
+  // a plain object accidentally carrying a `.code` field from unrelated
+  // code, or a malformed mock) with `.code === '28P01'` would trigger the
+  // unconditional fail-loud throw even though it is not a real Postgres
+  // auth rejection.
+  it('does NOT treat a non-Error object carrying .code === "28P01" as an auth failure', async () => {
+    const { isAuthFailure } = (await import('@/lib/data')) as unknown as {
+      isAuthFailure: (e: unknown) => boolean
+    }
+    const notAnError = { code: '28P01', message: 'looks like an auth failure but is not an Error' }
+    expect(isAuthFailure(notAnError)).toBe(false)
   })
 })
 
@@ -181,11 +196,9 @@ describe('production re-throw for unexpected errors', () => {
 
   it('re-throws an unexpected error when NODE_ENV=production, even though HELM_ENV is unset', async () => {
     vi.stubEnv('NODE_ENV', 'production')
-    vi.doMock('@/lib/server/tenant-session', () => ({
-      UnauthenticatedError: class extends Error {},
-      NoMembershipError: class extends Error {},
+    await mockTenantSession({
       requireTenantContext: async () => ({ tenantId: 't1' }),
-    }))
+    })
     await mockDb({
       withTenantContext: async () => {
         throw new Error('column "spend_minor" does not exist')
@@ -197,11 +210,9 @@ describe('production re-throw for unexpected errors', () => {
 
   it('re-throws an unexpected error when HELM_ENV=production', async () => {
     process.env.HELM_ENV = 'production'
-    vi.doMock('@/lib/server/tenant-session', () => ({
-      UnauthenticatedError: class extends Error {},
-      NoMembershipError: class extends Error {},
+    await mockTenantSession({
       requireTenantContext: async () => ({ tenantId: 't1' }),
-    }))
+    })
     await mockDb({
       withTenantContext: async () => {
         throw new Error('column "spend_minor" does not exist')
@@ -212,11 +223,9 @@ describe('production re-throw for unexpected errors', () => {
   })
 
   it('falls back to fixtures for an unexpected error outside production', async () => {
-    vi.doMock('@/lib/server/tenant-session', () => ({
-      UnauthenticatedError: class extends Error {},
-      NoMembershipError: class extends Error {},
+    await mockTenantSession({
       requireTenantContext: async () => ({ tenantId: 't1' }),
-    }))
+    })
     await mockDb({
       withTenantContext: async () => {
         throw new Error('column "spend_minor" does not exist')
@@ -229,11 +238,9 @@ describe('production re-throw for unexpected errors', () => {
 
   it('trims whitespace in HELM_ENV via env.appEnv (not a raw process.env read)', async () => {
     process.env.HELM_ENV = '  production  '
-    vi.doMock('@/lib/server/tenant-session', () => ({
-      UnauthenticatedError: class extends Error {},
-      NoMembershipError: class extends Error {},
+    await mockTenantSession({
       requireTenantContext: async () => ({ tenantId: 't1' }),
-    }))
+    })
     await mockDb({
       withTenantContext: async () => {
         throw new Error('column "spend_minor" does not exist')
@@ -263,11 +270,9 @@ describe('getCampaignDetail: unknown id on the DB path', () => {
   })
 
   it('returns null (not a fabricated fixture) when the repository finds no row for the id', async () => {
-    vi.doMock('@/lib/server/tenant-session', () => ({
-      UnauthenticatedError: class extends Error {},
-      NoMembershipError: class extends Error {},
+    await mockTenantSession({
       requireTenantContext: async () => ({ tenantId: 't1' }),
-    }))
+    })
     await mockDb({
       withTenantContext: async (_ctx: unknown, work: (tx: unknown) => unknown) => work({}),
     })
@@ -281,11 +286,9 @@ describe('getCampaignDetail: unknown id on the DB path', () => {
 
   it('returns the real row when the repository finds one', async () => {
     const fakeDetail = { campaign: { id: 'real-id' }, adGroups: [], creatives: [], series: [] }
-    vi.doMock('@/lib/server/tenant-session', () => ({
-      UnauthenticatedError: class extends Error {},
-      NoMembershipError: class extends Error {},
+    await mockTenantSession({
       requireTenantContext: async () => ({ tenantId: 't1' }),
-    }))
+    })
     await mockDb({
       withTenantContext: async (_ctx: unknown, work: (tx: unknown) => unknown) => work({}),
     })
@@ -335,11 +338,9 @@ describe('RLS-bypass guard fails closed', () => {
 
   it('re-throws RlsBypassError unconditionally, even outside production', async () => {
     const { RlsBypassError } = await import('@/lib/server/db')
-    vi.doMock('@/lib/server/tenant-session', () => ({
-      UnauthenticatedError: class extends Error {},
-      NoMembershipError: class extends Error {},
+    await mockTenantSession({
       requireTenantContext: async () => ({ tenantId: 't1' }),
-    }))
+    })
     await mockDb({
       withTenantContext: async () => {
         throw new RlsBypassError('neondb_owner')
@@ -347,6 +348,42 @@ describe('RLS-bypass guard fails closed', () => {
     })
     const freshData = await import('@/lib/data')
     await expect(freshData.getCampaignsFull()).rejects.toBeInstanceOf(RlsBypassError)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// CRITICAL (round 3): a real DatabaseUnreachableError raised through
+// withTenantContext must fall back to fixtures, not 500 the request -- this
+// is the actual production behavior a Neon outage now needs.
+// ---------------------------------------------------------------------------
+describe('DatabaseUnreachableError falls back to fixtures', () => {
+  beforeEach(() => {
+    vi.resetModules()
+    process.env.NEON_DATABASE_URL = 'postgres://fake'
+  })
+
+  afterEach(() => {
+    delete process.env.NEON_DATABASE_URL
+    vi.unstubAllEnvs()
+    vi.doUnmock('@/lib/server/tenant-session')
+    vi.doUnmock('@/lib/server/db')
+    vi.resetModules()
+  })
+
+  it('falls back to fixtures (does not throw, even in production) when withTenantContext throws DatabaseUnreachableError', async () => {
+    vi.stubEnv('NODE_ENV', 'production')
+    const { DatabaseUnreachableError: RealDatabaseUnreachableError } = await import('@/lib/server/db')
+    await mockTenantSession({
+      requireTenantContext: async () => ({ tenantId: 't1' }),
+    })
+    await mockDb({
+      withTenantContext: async () => {
+        throw new RealDatabaseUnreachableError(new Error('connect ECONNREFUSED'))
+      },
+    })
+    const freshData = await import('@/lib/data')
+    const campaigns = await freshData.getCampaignsFull()
+    expect(campaigns.length).toBe(8)
   })
 })
 
@@ -370,11 +407,9 @@ describe('auth failure fails closed', () => {
   })
 
   it('re-throws a SQLSTATE 28P01 auth failure unconditionally, even outside production', async () => {
-    vi.doMock('@/lib/server/tenant-session', () => ({
-      UnauthenticatedError: class extends Error {},
-      NoMembershipError: class extends Error {},
+    await mockTenantSession({
       requireTenantContext: async () => ({ tenantId: 't1' }),
-    }))
+    })
     await mockDb({
       withTenantContext: async () => {
         throw Object.assign(new Error('password authentication failed for user "app"'), { code: '28P01' })
