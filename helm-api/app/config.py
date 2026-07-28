@@ -1,10 +1,10 @@
-﻿"""Typed, environment-driven application configuration."""
+"""Typed, environment-driven application configuration."""
 
 from __future__ import annotations
 
 from enum import StrEnum
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     app_version: str = "0.1.0"
     log_level: str = "INFO"
     cors_origins: list[str] = Field(default_factory=list)
+    database_url: SecretStr | None = None
+    database_migration_url: SecretStr | None = None
 
     @field_validator("log_level")
     @classmethod
@@ -53,5 +55,16 @@ class Settings(BaseSettings):
             raise ValueError("CORS_ORIGINS must not contain '*' in staging or production")
         return self
 
+    def require_database_url(self) -> str:
+        """Return the pooled application URL only for database operations."""
 
+        if self.database_url is None or not self.database_url.get_secret_value().strip():
+            raise RuntimeError("DATABASE_URL is required for application database operations")
+        return self.database_url.get_secret_value()
 
+    def require_migration_database_url(self) -> str:
+        """Return the privileged unpooled URL only for Alembic migrations."""
+
+        if self.database_migration_url is None or not self.database_migration_url.get_secret_value().strip():
+            raise RuntimeError("DATABASE_MIGRATION_URL is required for database migrations")
+        return self.database_migration_url.get_secret_value()
