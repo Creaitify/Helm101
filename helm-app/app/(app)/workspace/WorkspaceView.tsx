@@ -47,7 +47,7 @@ export function WorkspaceView({ templates }: { templates: PromptTemplate[] }) {
             <button type="button" className={`ws-ground${grounded ? ' on' : ''}`} onClick={() => setGrounded((g) => !g)}>Grounded {grounded ? 'on' : 'off'}</button>
           </div>
           <div className="ws-thread">
-            {messages.length === 0 && <div className="ws-hero"><div className="ws-orb" /><h2>Let's start a smart conversation</h2><p>Ask about campaigns, CAC, audiences — grounded on Finnovate's data.</p></div>}
+            {messages.length === 0 && <div className="ws-hero"><div className="ws-orb" /><h2>Let&apos;s start a smart conversation</h2><p>Ask about campaigns, CAC, audiences — grounded on Finnovate&apos;s data.</p></div>}
             {messages.map((m) => <div key={m.id} className={`ws-msg ${m.role}`}><div className="ws-bubble">{m.text}</div>{m.citations && <div className="ws-cites">{m.citations.map((c, i) => <span key={i} className="ws-cite">{c.label}<em>{c.source}</em></span>)}</div>}</div>)}
           </div>
           <div className="ws-input">

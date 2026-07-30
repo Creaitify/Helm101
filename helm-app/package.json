@@ -8,6 +8,9 @@
     "start": "next start",
     "db:check": "node -e \"fetch('http://localhost:3000/api/health').then(async r => { console.log(r.status, await r.text()) })\"",
     "db:migrate": "node scripts/migrate.mjs",
+    "db:provision-app-role": "node scripts/provision-app-role.mjs",
+    "db:seed": "node --import tsx scripts/seed.mjs",
+    "db:verify-rls": "node scripts/verify-rls.mjs",
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest"
@@ -34,6 +37,7 @@
     "jsdom": "^29.1.1",
     "playwright": "^1.61.1",
     "tailwindcss": "^4",
+    "tsx": "^4.23.1",
     "typescript": "^5",
     "vitest": "^4.1.10"
   }

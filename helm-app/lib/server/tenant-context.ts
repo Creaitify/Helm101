@@ -23,6 +23,15 @@ export interface TenantTransaction {
 }
 
 /**
+ * A transaction that can also read. Repositories require this; writers such as
+ * appendAuditEvent keep accepting the narrower write-only TenantTransaction so
+ * existing callers and their tests compile unchanged.
+ */
+export interface TenantQueryTransaction extends TenantTransaction {
+  query<T>(statement: string, values?: readonly unknown[]): Promise<T[]>
+}
+
+/**
  * Sets Postgres transaction-local RLS context. Call this before every
  * tenant-owned query, inside the same transaction; never interpolate the id.
  */
