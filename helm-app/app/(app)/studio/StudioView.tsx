@@ -5,6 +5,17 @@ import { buildVariants } from '@/lib/studio'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 
+/**
+ * Mock CAC for a shipped chip. Derived from the variant id rather than
+ * Math.random() so the number is stable across re-renders — a random value in
+ * render is impure and would visibly change whenever the component re-rendered.
+ */
+function mockCac(id: string): number {
+  let hash = 0
+  for (const char of id) hash = (hash * 31 + char.charCodeAt(0)) % 200
+  return 300 + hash
+}
+
 export function StudioView({ brief }: { brief: Brief }) {
   const [form, setForm] = useState<Brief>(brief)
   const [phase, setPhase] = useState<'idle' | 'generating' | 'done'>('idle')
@@ -63,7 +74,7 @@ export function StudioView({ brief }: { brief: Brief }) {
               {shipped.length > 0 && (
                 <Card>
                   <div className="card-h"><div><h3>Shipped ({shipped.length})</h3></div></div>
-                  <div className="ship-strip">{shipped.map((v) => <div key={v.id} className="ship-chip">{v.headline}<span className="num">₹{300 + Math.floor(Math.random() * 200)} CAC</span></div>)}</div>
+                  <div className="ship-strip">{shipped.map((v) => <div key={v.id} className="ship-chip">{v.headline}<span className="num">₹{mockCac(v.id)} CAC</span></div>)}</div>
                 </Card>
               )}
             </>

@@ -30,7 +30,6 @@ describe('tenant isolation invariants', () => {
     // migration adds or removes a tenant-owned table, this list -- and the
     // count logged with it -- changes accordingly; the test does not pin an
     // expected count that would need separate updating.
-    // eslint-disable-next-line no-console
     console.log(`tenant-owned tables found across ${migrationFiles.length} migration file(s): ${tenantOwned.length} -- ${tenantOwned.join(', ')}`)
     expect(tenantOwned.length).toBeGreaterThan(0)
     for (const table of tenantOwned) {
