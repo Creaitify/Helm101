@@ -80,6 +80,8 @@ ROLE_DEFAULT_SCOPES: Mapping[MembershipRole, frozenset[Scope]] = {
 # promote a client viewer into an approver.
 ROLE_CEILINGS: Mapping[MembershipRole, frozenset[Scope]] = {
     MembershipRole.OWNER: frozenset(Scope),
+    # AGENCY_ADMIN sits directly below OWNER in the role hierarchy, so an audited grant
+    # can extend it to MEMBER_WRITE (unlike STRATEGIST, whose ceiling excludes it).
     MembershipRole.AGENCY_ADMIN: frozenset(Scope),
     MembershipRole.STRATEGIST: frozenset(Scope) - {Scope.MEMBER_WRITE},
     MembershipRole.CREATIVE: ROLE_DEFAULT_SCOPES[MembershipRole.CREATIVE] | {Scope.CAMPAIGN_WRITE},

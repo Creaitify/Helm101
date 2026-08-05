@@ -63,3 +63,17 @@ def test_unknown_scope_strings_are_ignored_not_crashed() -> None:
 def test_result_never_exceeds_the_ceiling_for_any_role(role: MembershipRole) -> None:
     result = effective_scopes(role, grants=[scope.value for scope in Scope], restrictions=[])
     assert result <= ROLE_CEILINGS[role]
+
+
+def test_agency_admin_can_be_granted_member_write_but_strategist_cannot() -> None:
+    """Agency admin sits directly below owner in hierarchy, so an audited grant can extend it
+    to MEMBER_WRITE. Strategist, lower in hierarchy, has a permanent ceiling that excludes it.
+    This asymmetry is intentional and must be maintained."""
+
+    # AGENCY_ADMIN can be granted MEMBER_WRITE (ceiling includes it)
+    admin_result = effective_scopes(MembershipRole.AGENCY_ADMIN, grants=[Scope.MEMBER_WRITE.value], restrictions=[])
+    assert Scope.MEMBER_WRITE in admin_result
+
+    # STRATEGIST cannot be granted MEMBER_WRITE (ceiling excludes it)
+    strategist_result = effective_scopes(MembershipRole.STRATEGIST, grants=[Scope.MEMBER_WRITE.value], restrictions=[])
+    assert Scope.MEMBER_WRITE not in strategist_result
