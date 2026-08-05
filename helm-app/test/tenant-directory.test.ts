@@ -29,12 +29,22 @@ describe('listTenantsFromApi', () => {
   })
 
   it('passes the session access token to the client', async () => {
-    getServerSession.mockResolvedValue({ accessToken: 'token-value' })
-    helmApiGet.mockResolvedValue({ data: [] })
+    const listTenantsFromApi = await subject()
 
-    await (await subject())()
-    expect(helmApiGet).toHaveBeenCalledWith(
-      expect.objectContaining({ path: '/api/v1/tenants', accessToken: 'token-value' }),
+    getServerSession.mockResolvedValue({ accessToken: 'token-alpha' })
+    helmApiGet.mockResolvedValue({ data: [] })
+    await listTenantsFromApi()
+    expect(helmApiGet).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ path: '/api/v1/tenants', accessToken: 'token-alpha' }),
+    )
+
+    getServerSession.mockResolvedValue({ accessToken: 'token-beta' })
+    helmApiGet.mockResolvedValue({ data: [] })
+    await listTenantsFromApi()
+    expect(helmApiGet).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ path: '/api/v1/tenants', accessToken: 'token-beta' }),
     )
   })
 
