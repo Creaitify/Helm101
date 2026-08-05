@@ -26,3 +26,46 @@
 ## Recommended Stage 1 start point
 
 Begin with the **identity, tenancy, and transaction-security foundation** in FastAPI: establish the Python project boundary and configuration validation; implement OIDC JWT verification; define `users` + `tenant_memberships` and canonical roles/scopes; create a scoped repository/unit-of-work that sets RLS tenant context; and implement append-only audit plus request/correlation/idempotency primitives. Do not start campaigns, gateway adapters, agents, integrations, or BFF endpoints until these primitives have security tests for cross-tenant denial, revoked/suspended membership, scope denial, and audit atomicity.
+
+## Stage 1 status (2026-07-30)
+
+Implemented in `helm-api` and verified by:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m ruff check .
+.\.venv\Scripts\python.exe -m mypy app
+```
+
+Closed:
+
+- OIDC JWT verification against a configured JWKS, provider-agnostic
+- Global `users` + `tenant_memberships` resolution with no auto-provisioning
+- Six canonical roles with pure, ceiling-capped scope arithmetic
+- Transaction-local RLS tenant context on every tenant-scoped query
+- Append-only audit with atomicity proven under rollback
+- Tenant-scoped idempotency key ledger
+
+Still open and deliberately untouched: items 1 and 5 (the production issuer
+choice), 2, 3, 4, 6, 7, 9 and 10. Item 8's canonical schema is now implemented
+for identity and membership; its invitation lifecycle and client-safe resource
+filters remain open.
+
+The `users.tenant_id` risk listed above is resolved in `helm-api`, whose schema
+uses global users plus memberships. It remains true of `helm-app`, which keeps
+its own prototype database until the sub-project 3 BFF cutover.
+
+### Known gap: membership resolution under non-bypass roles
+
+`IdentityRepository.list_active_memberships` queries FORCE-RLS tables before
+the connection's tenant context is set. This works when the connection is a
+superuser (which implicitly bypasses RLS), but returns zero rows under a
+non-bypass role. The production request path in `app/api/deps.py::current_caller`
+has no workaround and would fail in production against a real non-bypass role.
+
+The precedent for the fix is `helm-app/db/migrations/0008_membership_lookup_all.sql`,
+which creates a narrow `SECURITY DEFINER` function. A `helm-api` equivalent must
+be built before Stage 1 is production-ready. The test
+`test_membership_resolution_under_non_bypass_role_is_a_known_gap` in
+`tests/test_identity_integration.py` (xfail, strict=True) pins this defect so
+it cannot be silently lost during refactoring.

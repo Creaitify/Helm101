@@ -43,7 +43,14 @@ def test_database_urls_are_redacted_by_settings_representation() -> None:
 def test_global_user_membership_model_has_no_direct_tenant_id() -> None:
     membership_columns = set(TenantMembership.__table__.columns.keys())
     assert {"tenant_id", "user_id", "role", "scope_grants", "scope_restrictions"}.issubset(membership_columns)
-    assert set(MembershipRole) == {MembershipRole.OWNER, MembershipRole.AGENCY_ADMIN, MembershipRole.CLIENT_VIEWER}
+    assert set(MembershipRole) == {
+        MembershipRole.OWNER,
+        MembershipRole.AGENCY_ADMIN,
+        MembershipRole.STRATEGIST,
+        MembershipRole.CREATIVE,
+        MembershipRole.ANALYST,
+        MembershipRole.CLIENT_VIEWER,
+    }
     assert "tenant_id" not in User.__table__.columns
 
 
@@ -94,6 +101,31 @@ async def test_audit_repository_rejects_nested_metadata() -> None:
     )
 
     with pytest.raises(ValueError, match="scalar codes"):
+        await repository.append(session, TenantContext(tenant_id=uuid4()), event)
+
+
+@pytest.mark.asyncio
+async def test_audit_repository_rejects_an_actor_id_longer_than_the_column() -> None:
+    """A repository that silently accepted an oversized actor_id would be a trap for
+
+    the next caller: the database would reject it with a raw
+    StringDataRightTruncation deep inside a transaction instead of a clear
+    ValueError at the call site. actor_id is composed as f"{issuer}#{subject}"
+    from two String(500) identity columns, so 1010 is the widest legitimate
+    value; anything past it must be rejected before it ever reaches SQL.
+    """
+
+    repository = AuditRepository()
+    session = AsyncMock(spec=AsyncSession)
+    event = AuditEvent(
+        actor_type=AuditActorType.USER,
+        actor_id="x" * 1011,
+        action="test",
+        target="test",
+        request_id="request-1",
+    )
+
+    with pytest.raises(ValueError, match="actor_id"):
         await repository.append(session, TenantContext(tenant_id=uuid4()), event)
 
 

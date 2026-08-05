@@ -17,6 +17,9 @@ from app.db.base import Base
 class MembershipRole(StrEnum):
     OWNER = "owner"
     AGENCY_ADMIN = "agency_admin"
+    STRATEGIST = "strategist"
+    CREATIVE = "creative"
+    ANALYST = "analyst"
     CLIENT_VIEWER = "client_viewer"
 
 
@@ -37,10 +40,21 @@ class TenantMembership(Base):
         PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
     role: Mapped[MembershipRole] = mapped_column(
-        Enum(MembershipRole, name="tenant_membership_role", native_enum=True), nullable=False
+        Enum(
+            MembershipRole,
+            name="tenant_membership_role",
+            native_enum=True,
+            values_callable=lambda enum_cls: [m.value for m in enum_cls],
+        ),
+        nullable=False,
     )
     status: Mapped[MembershipStatus] = mapped_column(
-        Enum(MembershipStatus, name="tenant_membership_status", native_enum=True),
+        Enum(
+            MembershipStatus,
+            name="tenant_membership_status",
+            native_enum=True,
+            values_callable=lambda enum_cls: [m.value for m in enum_cls],
+        ),
         nullable=False,
         server_default=text("'invited'"),
     )
