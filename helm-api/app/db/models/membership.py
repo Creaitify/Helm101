@@ -17,6 +17,9 @@ from app.db.base import Base
 class MembershipRole(StrEnum):
     OWNER = "owner"
     AGENCY_ADMIN = "agency_admin"
+    STRATEGIST = "strategist"
+    CREATIVE = "creative"
+    ANALYST = "analyst"
     CLIENT_VIEWER = "client_viewer"
 
 

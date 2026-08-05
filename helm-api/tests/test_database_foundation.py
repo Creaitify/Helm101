@@ -43,7 +43,14 @@ def test_database_urls_are_redacted_by_settings_representation() -> None:
 def test_global_user_membership_model_has_no_direct_tenant_id() -> None:
     membership_columns = set(TenantMembership.__table__.columns.keys())
     assert {"tenant_id", "user_id", "role", "scope_grants", "scope_restrictions"}.issubset(membership_columns)
-    assert set(MembershipRole) == {MembershipRole.OWNER, MembershipRole.AGENCY_ADMIN, MembershipRole.CLIENT_VIEWER}
+    assert set(MembershipRole) == {
+        MembershipRole.OWNER,
+        MembershipRole.AGENCY_ADMIN,
+        MembershipRole.STRATEGIST,
+        MembershipRole.CREATIVE,
+        MembershipRole.ANALYST,
+        MembershipRole.CLIENT_VIEWER,
+    }
     assert "tenant_id" not in User.__table__.columns
 
 
