@@ -9,7 +9,6 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.membership import MembershipRole
-from app.db.models.tenant import TenantStatus
 from app.db.models.user import User, UserStatus
 
 
@@ -28,12 +27,18 @@ class MembershipRow:
 
 @dataclass(frozen=True, slots=True)
 class TenantLookupRow:
-    """An active tenant's public identifying columns, resolved before tenant context exists."""
+    """An active tenant's public identifying columns, resolved before tenant context exists.
+
+    No `status` field: `helm_lookup_active_tenant_by_slug` already filters to
+    `status = 'active'` in SQL, so a row reaching this dataclass is always
+    active by construction. Carrying a redundant `status` here would invite a
+    future reader to relax the SQL filter on the belief that the Python side
+    re-checks it -- it does not, and should not need to.
+    """
 
     id: UUID
     slug: str
     name: str
-    status: TenantStatus
 
 
 class IdentityRepository:
@@ -109,6 +114,13 @@ class IdentityRepository:
         function (`alembic/versions/20260805_05_tenant_lookup_by_slug_function.py`)
         that mirrors `list_active_memberships`'s use of
         `helm_lookup_active_memberships` for the same reason.
+
+        CLI-only today: `app.cli.provision` is the only caller, and it is run
+        by an operator, not driven by request input. Exposing this method (or
+        the underlying function) on an HTTP surface would make every tenant
+        slug enumerable to any authenticated caller via a distinguishable
+        found/not-found response -- do not wire it into a request path
+        without deliberately deciding that tradeoff first.
         """
 
         statement = text("select id, slug, name, status from helm_lookup_active_tenant_by_slug(:slug)")
@@ -116,4 +128,4 @@ class IdentityRepository:
         row = result.first()
         if row is None:
             return None
-        return TenantLookupRow(id=row.id, slug=row.slug, name=row.name, status=TenantStatus(row.status))
+        return TenantLookupRow(id=row.id, slug=row.slug, name=row.name)
