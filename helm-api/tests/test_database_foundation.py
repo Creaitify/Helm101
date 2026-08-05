@@ -104,6 +104,31 @@ async def test_audit_repository_rejects_nested_metadata() -> None:
         await repository.append(session, TenantContext(tenant_id=uuid4()), event)
 
 
+@pytest.mark.asyncio
+async def test_audit_repository_rejects_an_actor_id_longer_than_the_column() -> None:
+    """A repository that silently accepted an oversized actor_id would be a trap for
+
+    the next caller: the database would reject it with a raw
+    StringDataRightTruncation deep inside a transaction instead of a clear
+    ValueError at the call site. actor_id is composed as f"{issuer}#{subject}"
+    from two String(500) identity columns, so 1010 is the widest legitimate
+    value; anything past it must be rejected before it ever reaches SQL.
+    """
+
+    repository = AuditRepository()
+    session = AsyncMock(spec=AsyncSession)
+    event = AuditEvent(
+        actor_type=AuditActorType.USER,
+        actor_id="x" * 1011,
+        action="test",
+        target="test",
+        request_id="request-1",
+    )
+
+    with pytest.raises(ValueError, match="actor_id"):
+        await repository.append(session, TenantContext(tenant_id=uuid4()), event)
+
+
 def test_initial_migration_contains_rls_and_append_only_controls() -> None:
     migration = Path(__file__).parents[1] / "alembic" / "versions" / "20260727_01_foundation.py"
     contents = migration.read_text(encoding="utf-8")

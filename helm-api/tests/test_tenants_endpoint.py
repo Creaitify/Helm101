@@ -275,6 +275,54 @@ async def test_tenant_name_reflects_the_database_row_not_the_slug(pg_engine: Asy
 
 @pg_only
 @pytest.mark.asyncio
+async def test_long_issuer_and_subject_do_not_overflow_the_audit_actor_id(pg_engine: AsyncEngine) -> None:
+    """A realistic long issuer/subject pair must not 500 the only Stage 1 endpoint.
+
+    `actor_id` is built as f"{caller.issuer}#{caller.subject}". A Keycloak
+    realm URL plus a UUID subject, or a B2C provider's long opaque subject,
+    realistically exceeds 254 combined characters. Before the actor_id column
+    was widened, this raised StringDataRightTruncation inside the audit-write
+    transaction, which surfaced as an unhandled 500 via
+    unhandled_exception_handler for every request from that user.
+    """
+
+    tenant_id, user_id, membership_id = uuid4(), uuid4(), uuid4()
+    slug = f"longid-{tenant_id.hex[:8]}"
+    await _seed_tenant_and_membership(pg_engine, str(tenant_id), str(user_id), str(membership_id), slug, "Long Id Co")
+
+    long_issuer = "https://login.example-identity-platform.test/realms/" + ("finnovate-agency-realm-" * 8)
+    long_subject = "00000000-0000-4000-8000-" + "f" * 470  # combined with '#' exceeds the old 255-char limit
+
+    caller = AuthenticatedCaller(
+        user_id=user_id,
+        issuer=long_issuer,
+        subject=long_subject,
+        membership_id=membership_id,
+        tenant_id=tenant_id,
+        tenant_slug=slug,
+        role=MembershipRole.OWNER,
+        scopes=ROLE_DEFAULT_SCOPES[MembershipRole.OWNER],
+    )
+
+    async with _client_for(Settings(helm_env=HelmEnvironment.TEST), pg_engine, caller) as test_client:
+        response = await test_client.get("/api/v1/tenants", headers={"Authorization": "Bearer any"})
+
+    assert response.status_code == 200
+
+    async with pg_engine.begin() as connection:
+        await connection.execute(
+            text("select set_config('app.tenant_id', :tenant_id, true)"), {"tenant_id": str(tenant_id)}
+        )
+        audit_rows = await connection.execute(
+            text("select actor_id from audit_log where tenant_id = :tenant_id and action = 'tenant.context.read'"),
+            {"tenant_id": str(tenant_id)},
+        )
+        actor_ids = [row[0] for row in audit_rows.all()]
+        assert actor_ids == [f"{long_issuer}#{long_subject}"]
+
+
+@pg_only
+@pytest.mark.asyncio
 async def test_client_viewer_still_reads_their_tenant(pg_engine: AsyncEngine) -> None:
     """Every role with tenant:read, not just owner, can reach the endpoint."""
 

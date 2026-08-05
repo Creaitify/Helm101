@@ -37,7 +37,10 @@ class AuditLog(Base):
         ),
         nullable=False,
     )
-    actor_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    # 1010 = 500 ("identity_issuer") + 1 ("#" separator) + 500 ("identity_subject") + margin.
+    # Must stay >= the widest possible `f"{issuer}#{subject}"` composite; see
+    # alembic/versions/20260805_03_widen_audit_actor_id.py for the incident this fixes.
+    actor_id: Mapped[str] = mapped_column(String(1010), nullable=False)
     action: Mapped[str] = mapped_column(String(255), nullable=False)
     target: Mapped[str] = mapped_column(String(500), nullable=False)
     metadata_json: Mapped[dict[str, Any]] = mapped_column(
