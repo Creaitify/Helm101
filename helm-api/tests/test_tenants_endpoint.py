@@ -97,6 +97,34 @@ def test_valid_identity_without_membership_is_forbidden(client: TestClient) -> N
     assert response.json()["code"] == "no_membership"
 
 
+def test_caller_lacking_the_required_scope_is_forbidden_over_http(client: TestClient) -> None:
+    """Proves require_scope(TENANT_READ) is actually wired into the route's
+
+    dependency graph. Every default role holds TENANT_READ (see
+    ROLE_DEFAULT_SCOPES), and /api/v1/tenants is the only guarded route, so no
+    real caller can ever exercise a 403 here without this override. Without
+    this test, silently swapping require_tenant_read for current_caller in
+    the route signature would not be caught by the suite.
+    """
+
+    async def caller_without_scope() -> AuthenticatedCaller:
+        return AuthenticatedCaller(
+            user_id=uuid4(),
+            issuer="https://issuer.test",
+            subject="subject-1",
+            membership_id=uuid4(),
+            tenant_id=uuid4(),
+            tenant_slug="finnovate",
+            role=MembershipRole.CLIENT_VIEWER,
+            scopes=frozenset(),
+        )
+
+    client.app.dependency_overrides[current_caller] = caller_without_scope
+    response = client.get("/api/v1/tenants", headers={"Authorization": "Bearer any"})
+    assert response.status_code == 403
+    assert response.json()["code"] == "insufficient_scope"
+
+
 def test_response_never_contains_a_token_or_connection_string(client: TestClient) -> None:
     async def override() -> AuthenticatedCaller:
         raise NoMembershipError
