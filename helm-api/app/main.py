@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.router import api_router
+from app.auth.errors import AuthError, auth_exception_handler
 from app.config import Settings
 from app.core.errors import http_exception_handler, problem_response, unhandled_exception_handler
 from app.core.logging import RequestIdLoggingMiddleware, configure_logging
@@ -31,6 +32,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     application.include_router(api_router)
     application.add_exception_handler(StarletteHTTPException, http_exception_handler)
+    application.add_exception_handler(AuthError, auth_exception_handler)
     application.add_exception_handler(Exception, unhandled_exception_handler)
 
     @application.exception_handler(404)
