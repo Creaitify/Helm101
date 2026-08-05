@@ -1,6 +1,14 @@
 import withAuth from 'next-auth/middleware'
 
-export default withAuth({ pages: { signIn: '/login' } })
+/**
+ * Renamed from `middleware.ts`: Next.js 16 deprecates the `middleware` file
+ * convention in favour of `proxy`. The import path `next-auth/middleware` is
+ * NextAuth's own module name and is unrelated to the Next.js convention, so it
+ * stays as it is.
+ */
+const proxy = withAuth({ pages: { signIn: '/login' } })
+
+export default proxy
 
 /**
  * Everything is protected except authentication endpoints, the health probe,
