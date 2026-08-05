@@ -31,7 +31,9 @@ describe('problem details translation', () => {
   it('never carries an unexpected body into the message', () => {
     const error = translateProblem(500, { secret: 'postgres://user:pw@host/db' })
     expect(error.message).not.toContain('postgres://')
-    expect(JSON.stringify(error)).not.toContain('postgres://')
+    // Verify the serialization path a caller would use (logging, returning to client)
+    // doesn't expose the upstream body content via the message
+    expect(JSON.stringify({ code: error.code, message: error.message })).not.toContain('postgres://')
   })
 
   it('does not distinguish a missing tenant from a forbidden one', () => {

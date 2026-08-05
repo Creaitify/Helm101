@@ -30,6 +30,8 @@ export class HelmApiError extends Error {
 }
 
 function isProblem(body: unknown): body is { code: string } {
+  // Assumes body is plain JSON (never contains getters that throw).
+  // This is safe: callers only pass JSON.parse() or response.json() output.
   return (
     typeof body === 'object' &&
     body !== null &&
