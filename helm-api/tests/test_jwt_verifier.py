@@ -83,11 +83,24 @@ async def test_rejects_token_with_no_kid_header(signing_key: SigningKey, make_to
 
 @pytest.mark.asyncio
 async def test_rejects_alg_none_token(signing_key: SigningKey) -> None:
-    """The classic bypass: an unsigned token claiming algorithm 'none'."""
+    """The classic bypass: an unsigned token claiming algorithm 'none', with a valid kid.
+
+    Carrying signing_key.kid routes execution past the missing-kid guard and
+    into jwt.decode's algorithms= allowlist, which is the actual defense being
+    tested. A token with no kid at all is rejected earlier for an unrelated
+    reason and would not exercise the allowlist; see
+    test_rejects_token_with_no_kid_header for that separate case.
+    """
 
     import jwt as pyjwt
 
-    forged = pyjwt.encode({"sub": "evil", "iss": TEST_ISSUER, "aud": TEST_AUDIENCE}, None, algorithm=None)
+    forged = pyjwt.encode(
+        {"sub": "evil", "iss": TEST_ISSUER, "aud": TEST_AUDIENCE},
+        None,
+        algorithm=None,
+        headers={"kid": signing_key.kid},
+    )
+    assert pyjwt.get_unverified_header(forged) == {"alg": "none", "kid": signing_key.kid, "typ": "JWT"}
     with pytest.raises(InvalidTokenError):
         await _verifier(signing_key).verify(forged)
 
