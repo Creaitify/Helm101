@@ -119,7 +119,11 @@ class Settings(BaseSettings):
         ]
         if missing:
             raise RuntimeError(f"OIDC configuration is incomplete; missing: {', '.join(missing)}")
-        assert self.oidc_issuer is not None and self.oidc_jwks_url is not None and self.oidc_audience is not None
+        if self.oidc_issuer is None or self.oidc_jwks_url is None or self.oidc_audience is None:
+            # Unreachable: the `missing` check above already enforces this invariant.
+            # An explicit raise (not `assert`) narrows the types for mypy without
+            # depending on assertions, which are stripped under `python -O`.
+            raise RuntimeError("OIDC configuration is incomplete")
         return OidcSettings(
             issuer=self.oidc_issuer,
             jwks_url=self.oidc_jwks_url,
