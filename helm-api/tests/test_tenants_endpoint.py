@@ -173,10 +173,20 @@ async def pg_engine() -> AsyncIterator[AsyncEngine]:
 async def _seed_tenant_and_membership(
     engine: AsyncEngine, tenant_id: str, user_id: str, membership_id: str, slug: str, name: str
 ) -> None:
-    """Seed one active user, tenant and membership under a rollback-free real transaction."""
+    """Seed one active user, tenant and membership under the new tenant's own RLS context.
+
+    Mirrors tests/test_rls_integration.py's `_insert_tenant_fixture_data`: `tenants` and
+    `tenant_memberships` are FORCE ROW LEVEL SECURITY with `WITH CHECK (... = helm_tenant_id())`,
+    so `app.tenant_id` must be set to the real tenant id being inserted before those inserts run,
+    not left empty (an empty setting becomes SQL NULL, which never equals any row's id and would
+    make every such insert violate its policy). `users` has no RLS policy at all, so the context
+    setting does not affect it.
+    """
 
     async with engine.begin() as connection:
-        await connection.execute(text("select set_config('app.tenant_id', :tenant_id, true)"), {"tenant_id": ""})
+        await connection.execute(
+            text("select set_config('app.tenant_id', :tenant_id, true)"), {"tenant_id": tenant_id}
+        )
         await connection.execute(
             text(
                 "insert into users (id, identity_issuer, identity_subject, email_normalized, display_name, status) "
