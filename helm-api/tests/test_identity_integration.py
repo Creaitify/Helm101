@@ -11,23 +11,30 @@ import os
 import secrets
 import subprocess
 import sys
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from pathlib import Path
 from uuid import UUID, uuid4
 
+import httpx
 import pytest
 import pytest_asyncio
 from app.auth.errors import NoMembershipError
+from app.auth.jwt_verifier import JwtVerifier
 from app.auth.membership import build_caller, select_membership
 from app.auth.scopes import Scope
+from app.config import HelmEnvironment, OidcSettings, Settings
 from app.db.models.audit import AuditActorType
 from app.db.models.membership import MembershipRole
 from app.db.models.tenant import Tenant
 from app.db.repositories.audit import AuditEvent, AuditRepository
 from app.db.repositories.identity import IdentityRepository
+from app.db.session import create_session_factory
 from app.db.tenant_context import TenantContext, tenant_scoped_transaction
+from app.main import create_app
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+
+from tests.conftest import TEST_AUDIENCE, SigningKey
 
 PROJECT_ROOT = Path(__file__).parents[1]
 
@@ -43,6 +50,14 @@ pytestmark = pytest.mark.skipif(not DOCKER_IMPORTABLE, reason="testcontainers is
 
 NON_BYPASS_ROLE = "helm_app_role"
 NON_BYPASS_PASSWORD = secrets.token_hex(16)
+
+SEED_ISSUER = "https://issuer.test"
+
+
+def _seed_subject(user_id: UUID) -> str:
+    """Return the deterministic identity_subject `_seed` assigns to a seeded user."""
+
+    return f"subject-{user_id}"
 
 
 async def _provision_non_bypass_role(superuser_url: str) -> None:
@@ -67,6 +82,12 @@ async def _provision_non_bypass_role(superuser_url: str) -> None:
             await connection.execute(
                 text(f"grant all privileges on all sequences in schema public to {NON_BYPASS_ROLE}")
             )
+            await connection.execute(
+                text(
+                    "grant execute on function helm_lookup_active_memberships(text, text) "
+                    f"to {NON_BYPASS_ROLE}"
+                )
+            )
     finally:
         await engine.dispose()
 
@@ -76,19 +97,19 @@ def postgres_url() -> Iterator[str]:
     """Start a disposable PostgreSQL container and migrate it to head.
 
     Yields the superuser connection URL testcontainers provisions by default.
-    This is a known workaround, not an endorsed design: IdentityRepository's
-    pre-tenant-context membership lookup (list_active_memberships) queries
-    FORCE-RLS tables (tenant_memberships, tenants) before any app.tenant_id is
-    set, so under a genuinely non-bypass role it returns zero rows
-    unconditionally - see test_membership_resolution_under_non_bypass_role_is_a
-    _known_gap below, which pins this defect in a way CI will not let go
-    stale. Every other test file in this repo currently works around the same
-    gap by also connecting as a superuser (test_tenants_endpoint.py's
-    pg_engine; the application's own request path in app/api/deps.py has no
-    workaround at all and would fail in production against a real non-bypass
-    role). helm-app/db/migrations/0008_membership_lookup_all.sql shows the
-    precedent for the real fix: a narrow, parameterised `SECURITY DEFINER`
-    function (`helm_lookup_membership`) rather than a bypassed connection.
+    Most tests in this file still use that superuser connection (via the
+    `engine` fixture) for setup and assertions that are not themselves proving
+    an RLS property, matching test_tenants_endpoint.py's pg_engine. That is a
+    convenience for fixture setup, not a workaround for a gap: the production
+    request path (app/api/deps.py::current_caller, via
+    IdentityRepository.list_active_memberships) now resolves memberships
+    through `helm_lookup_active_memberships`, a narrow SECURITY DEFINER
+    function (alembic/versions/20260805_04_membership_lookup_function.py,
+    adapted from the precedent in
+    helm-app/db/migrations/0008_membership_lookup_all.sql) that works
+    correctly under a genuinely non-bypass role. That is proved directly by
+    test_membership_resolution_works_under_non_bypass_role below, which
+    connects as the provisioned non-bypass role, not the superuser.
     """
 
     try:
@@ -159,11 +180,12 @@ async def _seed(engine: AsyncEngine) -> dict[str, UUID]:
         await connection.execute(
             text(
                 "insert into users (id, identity_issuer, identity_subject, email_normalized, display_name, status) "
-                "values (:id, 'https://issuer.test', :subject, :email, 'Integration User', 'active')"
+                "values (:id, :issuer, :subject, :email, 'Integration User', 'active')"
             ),
             {
                 "id": str(ids["user"]),
-                "subject": f"subject-{ids['user']}",
+                "issuer": SEED_ISSUER,
+                "subject": _seed_subject(ids["user"]),
                 "email": f"u-{ids['user'].hex[:8]}@test.helm",
             },
         )
@@ -274,7 +296,7 @@ async def test_suspended_membership_disappears_from_resolution(engine: AsyncEngi
 
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as session:
-        before = await repository.list_active_memberships(session, ids["user"])
+        before = await repository.list_active_memberships(session, SEED_ISSUER, _seed_subject(ids["user"]))
     assert len(before) == 2
 
     async with engine.begin() as connection:
@@ -284,7 +306,7 @@ async def test_suspended_membership_disappears_from_resolution(engine: AsyncEngi
         )
 
     async with factory() as session:
-        after = await repository.list_active_memberships(session, ids["user"])
+        after = await repository.list_active_memberships(session, SEED_ISSUER, _seed_subject(ids["user"]))
     assert len(after) == 1
     assert after[0].membership_id == ids["membership_a"]
 
@@ -330,7 +352,7 @@ async def test_invited_but_never_accepted_membership_never_resolves(engine: Asyn
 
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as session:
-        resolved = await IdentityRepository().list_active_memberships(session, ids["user"])
+        resolved = await IdentityRepository().list_active_memberships(session, SEED_ISSUER, _seed_subject(ids["user"]))
     resolved_ids = {row.membership_id for row in resolved}
     assert invited_membership_id not in resolved_ids
     assert resolved_ids == {ids["membership_a"], ids["membership_b"]}
@@ -343,7 +365,9 @@ async def test_scope_denial_for_a_client_viewer(engine: AsyncEngine) -> None:
     ids = await _seed(engine)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as session:
-        memberships = await IdentityRepository().list_active_memberships(session, ids["user"])
+        memberships = await IdentityRepository().list_active_memberships(
+            session, SEED_ISSUER, _seed_subject(ids["user"])
+        )
 
     viewer = next(row for row in memberships if row.role == MembershipRole.CLIENT_VIEWER)
     caller = build_caller(ids["user"], "https://issuer.test", "subject-1", viewer)
@@ -356,7 +380,9 @@ async def test_unknown_tenant_hint_is_refused(engine: AsyncEngine) -> None:
     ids = await _seed(engine)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as session:
-        memberships = await IdentityRepository().list_active_memberships(session, ids["user"])
+        memberships = await IdentityRepository().list_active_memberships(
+            session, SEED_ISSUER, _seed_subject(ids["user"])
+        )
 
     with pytest.raises(NoMembershipError):
         select_membership(memberships, tenant_hint="a-tenant-that-is-not-theirs")
@@ -500,31 +526,26 @@ async def test_audit_and_action_roll_back_together_on_failure(engine: AsyncEngin
     assert audit_count == 0
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Known architectural gap, not a test bug: IdentityRepository.list_active_memberships "
-        "queries FORCE-RLS tables (tenant_memberships, tenants) before any app.tenant_id is set, "
-        "so under a genuinely non-bypass role it returns zero rows unconditionally - see the "
-        "postgres_url fixture's docstring above. The production request path in "
-        "app/api/deps.py::current_caller has no workaround for this at all. The precedent for the "
-        "real fix is helm-app/db/migrations/0008_membership_lookup_all.sql's narrow, parameterised "
-        "SECURITY DEFINER function (helm_lookup_membership); a HELM-api equivalent has not been "
-        "built yet. This is strict=True: once the gap is fixed, this test starts passing and pytest "
-        "will fail the run (XPASS) until the xfail marker above is removed, so the fix cannot land "
-        "silently."
-    ),
-    strict=True,
-)
 @pytest.mark.asyncio
-async def test_membership_resolution_under_non_bypass_role_is_a_known_gap(postgres_url: str) -> None:
-    """Pin the FORCE-RLS/pre-tenant-context gap in code so it cannot be silently lost.
+async def test_membership_resolution_works_under_non_bypass_role(postgres_url: str) -> None:
+    """Prove the production auth path resolves memberships under a least-privileged role.
+
+    This is the regression guard for the fix to the FORCE-RLS/pre-tenant-context
+    gap: IdentityRepository.list_active_memberships used to query FORCE-RLS
+    tables (tenant_memberships, tenants) directly before any app.tenant_id was
+    set, so under a genuinely non-bypass role it returned zero rows
+    unconditionally. It now calls `helm_lookup_active_memberships`, a narrow
+    SECURITY DEFINER function (alembic/versions/20260805_04_membership_lookup_
+    function.py) keyed on (identity_issuer, identity_subject).
 
     Connects as the non-bypass role (not the container's bypassing superuser)
     and asserts that IdentityRepository.list_active_memberships can resolve a
     real, active membership with no tenant context set - the same call
     app/api/deps.py::current_caller makes on every authenticated request. This
-    fails today; it exists so CI keeps this defect visible instead of it living
-    only in a report no automated run reads.
+    test was previously `test_membership_resolution_under_non_bypass_role_is_a
+    _known_gap`, marked xfail(strict=True); it is renamed and un-xfailed now
+    that the gap is fixed, and is the only test proving the production auth
+    path works under a least-privileged role.
     """
 
     non_bypass_engine = create_async_engine(_non_bypass_url(postgres_url), pool_pre_ping=True)
@@ -532,7 +553,117 @@ async def test_membership_resolution_under_non_bypass_role_is_a_known_gap(postgr
         ids = await _seed(non_bypass_engine)
         factory = async_sessionmaker(non_bypass_engine, expire_on_commit=False)
         async with factory() as session:
-            memberships = await IdentityRepository().list_active_memberships(session, ids["user"])
+            memberships = await IdentityRepository().list_active_memberships(
+                session, SEED_ISSUER, _seed_subject(ids["user"])
+            )
         assert len(memberships) == 2
+    finally:
+        await non_bypass_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_membership_lookup_function_never_leaks_across_identities(postgres_url: str) -> None:
+    """Prove `helm_lookup_active_memberships` is a keyhole, not a door.
+
+    A SECURITY DEFINER function is a deliberate, audited hole in RLS: it runs
+    with the defining role's privileges regardless of the caller's own grants.
+    That is only safe if it is narrowly parameterised and provably cannot
+    return another identity's rows. This seeds two entirely separate users
+    (via two independent `_seed` calls, each with its own random UUIDs and
+    therefore its own distinct identity_subject), then calls the function as
+    the non-bypass role with the *first* user's (issuer, subject) and asserts
+    every returned membership_id belongs only to that user's own two seeded
+    memberships - never the second user's, and never a row for a subject that
+    was not the one passed in.
+    """
+
+    non_bypass_engine = create_async_engine(_non_bypass_url(postgres_url), pool_pre_ping=True)
+    try:
+        first = await _seed(non_bypass_engine)
+        second = await _seed(non_bypass_engine)
+        assert first["user"] != second["user"]
+
+        factory = async_sessionmaker(non_bypass_engine, expire_on_commit=False)
+        async with factory() as session:
+            first_memberships = await IdentityRepository().list_active_memberships(
+                session, SEED_ISSUER, _seed_subject(first["user"])
+            )
+        first_ids = {row.membership_id for row in first_memberships}
+        assert first_ids == {first["membership_a"], first["membership_b"]}
+        assert second["membership_a"] not in first_ids
+        assert second["membership_b"] not in first_ids
+
+        async with factory() as session:
+            second_memberships = await IdentityRepository().list_active_memberships(
+                session, SEED_ISSUER, _seed_subject(second["user"])
+            )
+        second_ids = {row.membership_id for row in second_memberships}
+        assert second_ids == {second["membership_a"], second["membership_b"]}
+        assert first["membership_a"] not in second_ids
+        assert first["membership_b"] not in second_ids
+    finally:
+        await non_bypass_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_get_tenants_endpoint_works_over_http_under_non_bypass_role(
+    postgres_url: str, signing_key: SigningKey, make_token: Callable[..., str]
+) -> None:
+    """End-to-end proof: `GET /api/v1/tenants` succeeds under a non-bypass role.
+
+    Every other HTTP test of this route (tests/test_tenants_endpoint.py)
+    overrides `current_caller`, so it never exercises
+    `IdentityRepository.list_active_memberships` at all. This test does not
+    override `current_caller`: it builds the real app, wires it to the
+    provisioned non-bypass-role engine, sends a genuinely signed bearer token
+    (via the same `make_token`/`signing_key` fixtures conftest.py provides to
+    every other JWT test), and lets the full chain run - JWT verification,
+    `resolve_identity`, `list_active_memberships` (now via
+    `helm_lookup_active_memberships`), `select_membership`, and the route
+    body's own tenant-scoped read and audit write. This is the exact property
+    that was broken: the production request path failed closed for every
+    caller under a real non-bypass role.
+
+    Uses httpx.ASGITransport rather than Starlette's TestClient because
+    TestClient drives requests from a separate background-thread event loop,
+    and asyncpg connections are bound to the loop that created them (see
+    test_tenants_endpoint.py's `_client_for` docstring for the same
+    reasoning).
+    """
+
+    non_bypass_engine = create_async_engine(_non_bypass_url(postgres_url), pool_pre_ping=True)
+    try:
+        ids = await _seed(non_bypass_engine)
+        token = make_token(subject=_seed_subject(ids["user"]), issuer=SEED_ISSUER)
+
+        app = create_app(Settings(helm_env=HelmEnvironment.TEST))
+        app.state.session_factory = create_session_factory(non_bypass_engine)
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json=signing_key.jwks)
+
+        oidc_settings = OidcSettings(
+            issuer=SEED_ISSUER,
+            jwks_url="https://issuer.test/jwks",
+            audience=TEST_AUDIENCE,
+            allowed_algorithms=("RS256",),
+            jwks_cache_seconds=300,
+        )
+        app.state.jwt_verifier = JwtVerifier(
+            oidc_settings, httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        )
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+        ) as test_client:
+            response = await test_client.get(
+                "/api/v1/tenants",
+                headers={"Authorization": f"Bearer {token}", "X-HELM-Active-Tenant": str(ids["tenant_a"])},
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["data"][0]["id"] == str(ids["tenant_a"])
+        assert body["meta"]["role"] == "owner"
     finally:
         await non_bypass_engine.dispose()

@@ -45,6 +45,8 @@ Closed:
 - Transaction-local RLS tenant context on every tenant-scoped query
 - Append-only audit with atomicity proven under rollback
 - Tenant-scoped idempotency key ledger
+- Membership resolution before tenant context exists, proven under a
+  non-bypass role
 
 Still open and deliberately untouched: items 1 and 5 (the production issuer
 choice), 2, 3, 4, 6, 7, 9 and 10. Item 8's canonical schema is now implemented
@@ -55,17 +57,26 @@ The `users.tenant_id` risk listed above is resolved in `helm-api`, whose schema
 uses global users plus memberships. It remains true of `helm-app`, which keeps
 its own prototype database until the sub-project 3 BFF cutover.
 
-### Known gap: membership resolution under non-bypass roles
+### Resolved: membership resolution under non-bypass roles
 
-`IdentityRepository.list_active_memberships` queries FORCE-RLS tables before
-the connection's tenant context is set. This works when the connection is a
-superuser (which implicitly bypasses RLS), but returns zero rows under a
-non-bypass role. The production request path in `app/api/deps.py::current_caller`
-has no workaround and would fail in production against a real non-bypass role.
+`IdentityRepository.list_active_memberships` queries FORCE-RLS tables
+(`tenant_memberships`, `tenants`) before the connection's tenant context is
+set, since selecting the tenant is the point of the query. It now does this
+through `helm_lookup_active_memberships`
+(`alembic/versions/20260805_04_membership_lookup_function.py`), a narrow,
+parameterised `SECURITY DEFINER` function keyed on
+`(identity_issuer, identity_subject)` — adapting the precedent in
+`helm-app/db/migrations/0008_membership_lookup_all.sql`, but keyed on the
+issuer/subject pair rather than email, per the identity-key rule above. The
+function is revoked from `public`, granted only to the application role, and
+returns only the passed identity's own active memberships in active tenants.
+The production request path in `app/api/deps.py::current_caller` now resolves
+memberships correctly under a real non-bypass role.
 
-The precedent for the fix is `helm-app/db/migrations/0008_membership_lookup_all.sql`,
-which creates a narrow `SECURITY DEFINER` function. A `helm-api` equivalent must
-be built before Stage 1 is production-ready. The test
-`test_membership_resolution_under_non_bypass_role_is_a_known_gap` in
-`tests/test_identity_integration.py` (xfail, strict=True) pins this defect so
-it cannot be silently lost during refactoring.
+The test, formerly `test_membership_resolution_under_non_bypass_role_is_a_known_gap`
+(xfail, strict=True), is renamed
+`test_membership_resolution_works_under_non_bypass_role` and now passes
+un-xfailed in `tests/test_identity_integration.py`. A second test,
+`test_membership_lookup_function_never_leaks_across_identities`, proves the
+function returns only the passed identity's own memberships and never another
+user's.

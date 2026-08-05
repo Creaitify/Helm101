@@ -77,9 +77,9 @@ server-side:
 
 The red-team matrix in `tests/test_identity_integration.py` runs against a
 disposable PostgreSQL container and covers cross-tenant denial, immediate
-membership revocation, scope denial, and audit atomicity. It skips when Docker
-is unavailable; run it with Docker started before merging security-relevant
-changes.
+membership revocation, scope denial, audit atomicity, and membership
+resolution under a non-bypass role. It skips when Docker is unavailable; run
+it with Docker started before merging security-relevant changes.
 
 The container integration tests require `testcontainers` (included in
 `requirements-dev.txt`) and Docker to be running. They query FORCE-RLS tables
@@ -93,25 +93,33 @@ under a non-superuser role. To run them explicitly:
 Some tests are additionally gated on `HELM_TEST_DATABASE_URL`; never point this
 at a shared, staging, or production database.
 
-### Architectural gap: membership resolution under a non-bypass role
+### Membership resolution under a non-bypass role
 
-`IdentityRepository.list_active_memberships` queries FORCE-RLS tables
-(`tenant_memberships`, `tenants`) before any `app.tenant_id` is set — a
-chicken-and-egg scenario, since choosing the tenant is the point of the query.
-Under a genuinely non-`BYPASSRLS` role it returns zero rows unconditionally, so
-`app/api/deps.py::current_caller` — the auth path for every authenticated
-request — cannot resolve memberships. Every environment tested so far connects
-as a superuser, which implicitly bypasses RLS regardless of table policies and
-masks this defect.
+`IdentityRepository.list_active_memberships` cannot be an ordinary tenant-scoped
+query: it queries FORCE-RLS tables (`tenant_memberships`, `tenants`) before any
+`app.tenant_id` is set, since choosing the tenant is the point of the query, and
+`tenant_id = helm_tenant_id()` admits no rows while that setting is unset. It
+resolves this by calling `helm_lookup_active_memberships`
+(`alembic/versions/20260805_04_membership_lookup_function.py`), a narrow,
+parameterised `SECURITY DEFINER` function keyed on
+`(identity_issuer, identity_subject)` — adapted from the precedent in
+`helm-app/db/migrations/0008_membership_lookup_all.sql`, but keyed on the
+issuer/subject pair rather than email, since email is not an identity key. The
+function is revoked from `public` and granted only to the application role, and
+returns only the passed identity's own active memberships in active tenants,
+deterministically ordered.
 
-This is pinned by `test_membership_resolution_under_non_bypass_role_is_a_known_gap`
-(xfail, `strict=True`) in `tests/test_identity_integration.py`. When fixed, this
-test must pass. The precedent for the fix is `helm-app/db/migrations/0008_membership_lookup_all.sql`,
-which creates a narrow, parameterised `SECURITY DEFINER` function. **This gap must be resolved before Stage 1 is production-ready.**
+This is proven by `test_membership_resolution_works_under_non_bypass_role` in
+`tests/test_identity_integration.py`, which connects as a genuinely
+non-`BYPASSRLS` role — the same class of role the production database
+connection uses — and by
+`test_membership_lookup_function_never_leaks_across_identities`, which proves
+the function cannot return one user's memberships when called with another
+user's identity.
 
 ### Security guarantees proven
 
-The four security guarantees have been verified against real containerised
+The five security guarantees have been verified against real containerised
 PostgreSQL under a verified non-bypass role:
 
 1. **Cross-tenant read denial:** A connection with tenant A's context set cannot
@@ -123,10 +131,13 @@ PostgreSQL under a verified non-bypass role:
    approval-decide scopes.
 4. **Audit atomicity:** An action and its audit event commit or roll back
    together; neither can survive without the other.
+5. **Membership resolution before tenant context exists:** the production auth
+   path (`app/api/deps.py::current_caller`) resolves a caller's own memberships
+   correctly under a non-bypass role, and only that caller's own memberships.
 
-These proofs cover the security model when the connection is already scoped to a
-tenant. They do *not* yet cover the production request path under a
-least-privileged (non-bypass) role, which is blocked by the architectural gap above.
+These proofs now cover the full production request path, including membership
+resolution before any tenant context is set, under a least-privileged
+(non-bypass) role.
 
 ### The OIDC issuer is deliberately not chosen
 
