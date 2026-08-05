@@ -117,6 +117,19 @@ connection uses — and by
 the function cannot return one user's memberships when called with another
 user's identity.
 
+The function pins `search_path = public, pg_temp` (`pg_temp` listed
+explicitly and last). Listing only `public` is insufficient and was briefly
+the case here: `pg_temp` is implicitly searched *first* whenever it is not
+listed, and `PUBLIC` holds `TEMP` on the database by default, so any role
+able to execute the function could otherwise shadow `public.users` with a
+session-local temp table and make the `SECURITY DEFINER` function return an
+arbitrary victim's memberships for a fabricated identity pair.
+`test_membership_lookup_function_ignores_a_shadowing_temp_table` is the
+regression guard, proven to fail against the vulnerable variant and pass
+against the fix. The same gap exists in the Phase A precedent
+(`helm-app/db/migrations/0008_membership_lookup_all.sql`) and is unfixed
+there — tracked separately, out of scope for this repository.
+
 ### Security guarantees proven
 
 The five security guarantees have been verified against real containerised

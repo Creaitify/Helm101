@@ -41,3 +41,34 @@ _From the Phase A ("real spine": auth + tenant-scoped data) work, tasks 1-14._
 - Mobile: sidebar is a top-stacked panel under ~820px, not a proper icon-rail/drawer (spec §5 envisioned a drawer).
 - Move remaining page-level presentational datasets (heatmap seed, gauge targets, leaderboard/approvals rows on Analytics) into `lib/data`.
 - `DataTable` uses `any` for columns/rows — tighten types.
+
+## SECURITY — Phase A `helm_lookup_membership` is exploitable via `pg_temp` (open)
+
+_Found 2026-08-05 during the Stage 1 RLS-gap fix review. This is live in `helm-app`, not
+a branch-only issue._
+
+`helm-app/db/migrations/0008_membership_lookup_all.sql:35` declares
+`set search_path = public` on a `security definer` function. **`pg_temp` is implicitly
+searched first when it is not listed explicitly**, and it is writable by any role holding
+`TEMP` on the database (which `PUBLIC` has by default).
+
+Any role that can `EXECUTE` the function can therefore shadow `users` with a temp table it
+controls, and the definer-rights function will read the attacker's table instead of the
+real one. The same class of defect was reproduced as a working privilege escalation
+against the FastAPI equivalent: an attacker maps an arbitrary identity to a victim's real
+`user_id`, calls the function, and receives the victim's tenants, roles and scopes — for
+an identity that exists nowhere in the real `users` table.
+
+Because this function is the identity-resolution step, subverting it subverts
+authentication itself.
+
+**Fix:** `set search_path = public, pg_temp` — listing `pg_temp` explicitly and last
+removes its implicit priority. Verified effective against the exploit on the FastAPI side.
+
+Add a regression test that creates a temp `users` table shadowing the real one, calls
+`helm_lookup_membership`, and asserts zero rows. The existing cross-identity tests cannot
+catch this because they never manipulate `search_path`.
+
+Blast radius today is limited to whoever holds `EXECUTE` (the app role), so it requires
+SQL injection or a compromised app connection to reach — but the entire justification for
+`SECURITY DEFINER` is that it is safe to grant, and this defeats that.

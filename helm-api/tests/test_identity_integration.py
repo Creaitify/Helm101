@@ -312,6 +312,75 @@ async def test_suspended_membership_disappears_from_resolution(engine: AsyncEngi
 
 
 @pytest.mark.asyncio
+async def test_suspended_user_loses_all_memberships(engine: AsyncEngine) -> None:
+    """A suspended *user* must stop resolving in every tenant, not just one membership.
+
+    `helm_lookup_active_memberships`'s `u.status = 'active'` filter is
+    load-bearing for Stage 1's "revoked and suspended membership denial"
+    guarantee, but nothing in the suite previously exercised it directly -
+    only `tm.status` (per-membership suspension) was tested. Deleting
+    `and u.status = 'active'` from the function would not fail any prior
+    test. This seeds a user with two active memberships (both still
+    'active'), suspends the *user* row itself, and asserts both memberships
+    stop resolving even though tenant_memberships.status is untouched.
+    """
+
+    ids = await _seed(engine)
+    repository = IdentityRepository()
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        before = await repository.list_active_memberships(session, SEED_ISSUER, _seed_subject(ids["user"]))
+    assert len(before) == 2
+
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("update users set status = 'suspended' where id = :id"),
+            {"id": str(ids["user"])},
+        )
+
+    async with factory() as session:
+        after = await repository.list_active_memberships(session, SEED_ISSUER, _seed_subject(ids["user"]))
+    assert after == []
+
+
+@pytest.mark.asyncio
+async def test_archived_tenant_membership_stops_resolving(engine: AsyncEngine) -> None:
+    """A membership in an archived tenant must stop resolving, even if the membership itself is active.
+
+    `helm_lookup_active_memberships`'s `t.status = 'active'` filter is
+    load-bearing for the same guarantee as the suspended-user filter above,
+    and was equally untested: only `tm.status` was exercised. Deleting
+    `and t.status = 'active'` from the function would not fail any prior
+    test. This archives tenant_a (leaving its membership row itself
+    'active') and asserts only tenant_b's membership still resolves.
+    """
+
+    ids = await _seed(engine)
+    repository = IdentityRepository()
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        before = await repository.list_active_memberships(session, SEED_ISSUER, _seed_subject(ids["user"]))
+    assert len(before) == 2
+
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("select set_config('app.tenant_id', :tenant_id, true)"),
+            {"tenant_id": str(ids["tenant_a"])},
+        )
+        await connection.execute(
+            text("update tenants set status = 'archived' where id = :id"),
+            {"id": str(ids["tenant_a"])},
+        )
+
+    async with factory() as session:
+        after = await repository.list_active_memberships(session, SEED_ISSUER, _seed_subject(ids["user"]))
+    assert len(after) == 1
+    assert after[0].membership_id == ids["membership_b"]
+
+
+@pytest.mark.asyncio
 async def test_invited_but_never_accepted_membership_never_resolves(engine: AsyncEngine) -> None:
     """An invited-but-not-yet-accepted membership must never resolve as a caller.
 
@@ -601,6 +670,73 @@ async def test_membership_lookup_function_never_leaks_across_identities(postgres
         assert second_ids == {second["membership_a"], second["membership_b"]}
         assert first["membership_a"] not in second_ids
         assert first["membership_b"] not in second_ids
+    finally:
+        await non_bypass_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_membership_lookup_function_ignores_a_shadowing_temp_table(postgres_url: str) -> None:
+    """Prove `helm_lookup_active_memberships` cannot be tricked by a `pg_temp` shadow table.
+
+    `pg_temp` is implicitly searched FIRST whenever it is not listed in
+    `search_path`, and `PUBLIC` holds `TEMP` on the database by default. A
+    function declared `set search_path = public` alone (without `pg_temp`
+    listed explicitly and last) is exploitable: any role that can execute it
+    can `create temp table users (...)` in its own session and the
+    SECURITY DEFINER function will join against that attacker-controlled
+    table instead of the real `public.users`, handing back another user's
+    real memberships for an identity pair that exists nowhere in the real
+    table. This was reproduced live against an earlier revision of
+    alembic/versions/20260805_04_membership_lookup_function.py before the fix
+    (`set search_path = public, pg_temp`) landed; see the migration's module
+    docstring.
+
+    This test seeds one real victim membership, then - as the non-bypass
+    role, in a single session - creates a temp `users` table mapping a
+    fabricated identity pair to the victim's real `user_id`, and calls the
+    function with that fabricated pair. The fixed function must return zero
+    rows: `public.users` (searched via the pinned, non-shadowable path) has no
+    row for the fabricated identity, so the join produces nothing, regardless
+    of what the caller's own `pg_temp.users` claims.
+    """
+
+    non_bypass_engine = create_async_engine(_non_bypass_url(postgres_url), pool_pre_ping=True)
+    try:
+        victim = await _seed(non_bypass_engine)
+        fabricated_issuer = "https://attacker-controlled.test"
+        fabricated_subject = "pwned-by-attacker"
+
+        async with non_bypass_engine.begin() as connection:
+            await connection.execute(
+                text("create temp table users (id uuid, identity_issuer text, identity_subject text, status text)")
+            )
+            await connection.execute(
+                text(
+                    "insert into users (id, identity_issuer, identity_subject, status) "
+                    "values (:user_id, :issuer, :subject, 'active')"
+                ),
+                {"user_id": str(victim["user"]), "issuer": fabricated_issuer, "subject": fabricated_subject},
+            )
+            result = await connection.execute(
+                text(
+                    "select membership_id from helm_lookup_active_memberships(:issuer, :subject)"
+                ),
+                {"issuer": fabricated_issuer, "subject": fabricated_subject},
+            )
+            escalated_rows = result.all()
+
+        assert escalated_rows == [], (
+            "helm_lookup_active_memberships returned rows for an identity pair that exists only in "
+            "a session-local temp table shadowing 'users' - the pg_temp search-path fix regressed"
+        )
+
+        async with non_bypass_engine.begin() as connection:
+            legitimate = await connection.execute(
+                text("select membership_id from helm_lookup_active_memberships(:issuer, :subject)"),
+                {"issuer": SEED_ISSUER, "subject": _seed_subject(victim["user"])},
+            )
+            legitimate_ids = {row[0] for row in legitimate.all()}
+        assert legitimate_ids == {victim["membership_a"], victim["membership_b"]}
     finally:
         await non_bypass_engine.dispose()
 

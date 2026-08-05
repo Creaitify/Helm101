@@ -80,3 +80,21 @@ un-xfailed in `tests/test_identity_integration.py`. A second test,
 `test_membership_lookup_function_never_leaks_across_identities`, proves the
 function returns only the passed identity's own memberships and never another
 user's.
+
+An initial version of the function set `search_path = public` only, which
+left `pg_temp` implicitly searched first (`PUBLIC` holds `TEMP` on the
+database by default), so any role able to execute the function could shadow
+`public.users` with a session-local temp table and make the function return
+an arbitrary victim's real memberships for an identity pair that existed
+nowhere in the real table. This was caught in review, reproduced live, and
+fixed by explicitly listing `pg_temp` last in the search path
+(`set search_path = public, pg_temp`), which removes its implicit priority.
+`test_membership_lookup_function_ignores_a_shadowing_temp_table` is the
+regression guard; it fails against the vulnerable variant and passes against
+the fix. `helm-app/db/migrations/0008_membership_lookup_all.sql:35`, the
+Phase A precedent this migration adapted, has the same `pg_temp` gap and has
+not been fixed — tracked separately, out of scope for `helm-api`.
+`test_suspended_user_loses_all_memberships` and
+`test_archived_tenant_membership_stops_resolving` additionally close a
+coverage gap: the function's `u.status = 'active'` and `t.status = 'active'`
+filters were load-bearing but previously untested in isolation.
