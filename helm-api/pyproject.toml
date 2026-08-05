@@ -21,6 +21,11 @@ src = ["app", "tests"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC"]
 
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's Depends() is a marker consumed by the framework's DI, not a mutable
+# default; calling it in an argument default is the framework's documented idiom.
+extend-immutable-calls = ["fastapi.Depends"]
+
 [tool.mypy]
 python_version = "3.13"
 files = ["app", "tests"]
