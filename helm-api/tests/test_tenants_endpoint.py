@@ -207,8 +207,16 @@ async def _seed_tenant_and_membership(
         )
 
 
-def _client_for(app_settings: Settings, engine: AsyncEngine, caller: AuthenticatedCaller) -> TestClient:
-    """Build a TestClient wired to a real engine and a fixed authenticated caller."""
+def _client_for(app_settings: Settings, engine: AsyncEngine, caller: AuthenticatedCaller) -> httpx.AsyncClient:
+    """Build an ASGI-transported client wired to a real engine and a fixed caller.
+
+    Uses httpx.AsyncClient with ASGITransport rather than Starlette's TestClient:
+    TestClient drives the app from a separate background-thread event loop, but
+    asyncpg connections are bound to the loop that created them. Against a real
+    Postgres engine created in the test's own event loop, that mismatch surfaces
+    as "attached to a different loop" errors and a 500 on every request. Running
+    the transport in-process in the same loop as the engine avoids the mismatch.
+    """
 
     app = create_app(app_settings)
     session_factory = create_session_factory(engine)
@@ -221,7 +229,7 @@ def _client_for(app_settings: Settings, engine: AsyncEngine, caller: Authenticat
 
     app.dependency_overrides[current_caller] = override_caller
     app.dependency_overrides[get_session_factory] = override_session_factory
-    return TestClient(app, raise_server_exceptions=False)
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver")
 
 
 @pg_only
@@ -245,8 +253,8 @@ async def test_tenant_name_reflects_the_database_row_not_the_slug(pg_engine: Asy
         scopes=ROLE_DEFAULT_SCOPES[MembershipRole.OWNER],
     )
 
-    with _client_for(Settings(helm_env=HelmEnvironment.TEST), pg_engine, caller) as test_client:
-        response = test_client.get("/api/v1/tenants", headers={"Authorization": "Bearer any"})
+    async with _client_for(Settings(helm_env=HelmEnvironment.TEST), pg_engine, caller) as test_client:
+        response = await test_client.get("/api/v1/tenants", headers={"Authorization": "Bearer any"})
 
     assert response.status_code == 200
     body = response.json()
@@ -285,7 +293,7 @@ async def test_client_viewer_still_reads_their_tenant(pg_engine: AsyncEngine) ->
         scopes=ROLE_DEFAULT_SCOPES[MembershipRole.CLIENT_VIEWER],
     )
 
-    with _client_for(Settings(helm_env=HelmEnvironment.TEST), pg_engine, caller) as test_client:
-        response = test_client.get("/api/v1/tenants", headers={"Authorization": "Bearer any"})
+    async with _client_for(Settings(helm_env=HelmEnvironment.TEST), pg_engine, caller) as test_client:
+        response = await test_client.get("/api/v1/tenants", headers={"Authorization": "Bearer any"})
 
     assert response.status_code == 200

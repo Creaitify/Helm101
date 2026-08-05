@@ -27,7 +27,14 @@ class Tenant(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     plan: Mapped[str] = mapped_column(String(100), nullable=False, server_default=text("'starter'"))
     status: Mapped[TenantStatus] = mapped_column(
-        Enum(TenantStatus, name="tenant_status", native_enum=True), nullable=False, server_default=text("'active'")
+        Enum(
+            TenantStatus,
+            name="tenant_status",
+            native_enum=True,
+            values_callable=lambda enum_cls: [m.value for m in enum_cls],
+        ),
+        nullable=False,
+        server_default=text("'active'"),
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))

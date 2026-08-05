@@ -29,7 +29,13 @@ class AuditLog(Base):
         PGUUID(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
     )
     actor_type: Mapped[AuditActorType] = mapped_column(
-        Enum(AuditActorType, name="audit_actor_type", native_enum=True), nullable=False
+        Enum(
+            AuditActorType,
+            name="audit_actor_type",
+            native_enum=True,
+            values_callable=lambda enum_cls: [m.value for m in enum_cls],
+        ),
+        nullable=False,
     )
     actor_id: Mapped[str] = mapped_column(String(255), nullable=False)
     action: Mapped[str] = mapped_column(String(255), nullable=False)
