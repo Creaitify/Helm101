@@ -1,4 +1,5 @@
 import 'server-only'
+import { requireServerEnv } from './env'
 import { HelmApiError, translateProblem } from './helm-api-errors'
 
 /** A slow backend must not hold a page render open indefinitely. */
@@ -15,9 +16,7 @@ export interface HelmApiRequest {
 }
 
 function resolveBaseUrl(): string {
-  const value = process.env.HELM_API_BASE_URL?.trim()
-  if (!value) throw new Error('Missing required server environment variable: helmApiBaseUrl')
-  return value.replace(/\/+$/, '')
+  return requireServerEnv('helmApiBaseUrl').replace(/\/+$/, '')
 }
 
 async function readBody(response: Response): Promise<unknown> {
