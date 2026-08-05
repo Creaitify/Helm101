@@ -65,7 +65,7 @@ async def current_caller(
     repository = IdentityRepository()
     async with session_factory() as session:
         identity = await resolve_identity(session, repository, verified)
-        memberships = await repository.list_active_memberships(session, identity.user_id)
+        memberships = await repository.list_active_memberships(session, identity.issuer, identity.subject)
     membership = select_membership(memberships, request.headers.get(TENANT_HINT_HEADER))
     return build_caller(identity.user_id, identity.issuer, identity.subject, membership)
 
