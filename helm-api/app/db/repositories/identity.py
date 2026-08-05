@@ -9,6 +9,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.membership import MembershipRole
+from app.db.models.tenant import TenantStatus
 from app.db.models.user import User, UserStatus
 
 
@@ -23,6 +24,16 @@ class MembershipRow:
     role: MembershipRole
     scope_grants: list[str]
     scope_restrictions: list[str]
+
+
+@dataclass(frozen=True, slots=True)
+class TenantLookupRow:
+    """An active tenant's public identifying columns, resolved before tenant context exists."""
+
+    id: UUID
+    slug: str
+    name: str
+    status: TenantStatus
 
 
 class IdentityRepository:
@@ -86,3 +97,23 @@ class IdentityRepository:
             )
             for row in result.all()
         ]
+
+    async def find_active_tenant_by_slug(self, session: AsyncSession, slug: str) -> TenantLookupRow | None:
+        """Resolve an active tenant by slug before any tenant context exists.
+
+        `tenants` is `FORCE ROW LEVEL SECURITY` with `id = helm_tenant_id()`,
+        which admits no rows while `app.tenant_id` is unset -- and choosing
+        which tenant to act in (here: which tenant `app.cli.provision`
+        provisions a membership into) is necessarily a pre-context operation.
+        Calls `helm_lookup_active_tenant_by_slug`, a narrow `SECURITY DEFINER`
+        function (`alembic/versions/20260805_05_tenant_lookup_by_slug_function.py`)
+        that mirrors `list_active_memberships`'s use of
+        `helm_lookup_active_memberships` for the same reason.
+        """
+
+        statement = text("select id, slug, name, status from helm_lookup_active_tenant_by_slug(:slug)")
+        result = await session.execute(statement, {"slug": slug})
+        row = result.first()
+        if row is None:
+            return None
+        return TenantLookupRow(id=row.id, slug=row.slug, name=row.name, status=TenantStatus(row.status))
