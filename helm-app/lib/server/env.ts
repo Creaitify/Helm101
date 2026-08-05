@@ -15,6 +15,11 @@ export const env = {
   microsoftClientId: optional('AUTH_MICROSOFT_ENTRA_ID_ID'),
   microsoftClientSecret: optional('AUTH_MICROSOFT_ENTRA_ID_SECRET'),
   microsoftIssuer: optional('AUTH_MICROSOFT_ENTRA_ID_ISSUER'),
+  auth0Issuer: optional('AUTH0_ISSUER'),
+  auth0ClientId: optional('AUTH0_CLIENT_ID'),
+  auth0ClientSecret: optional('AUTH0_CLIENT_SECRET'),
+  auth0Audience: optional('AUTH0_AUDIENCE'),
+  helmApiBaseUrl: optional('HELM_API_BASE_URL'),
   encryptionKey: optional('ENCRYPTION_KEY'),
   appEnv: optional('HELM_ENV') ?? 'development',
 } as const
