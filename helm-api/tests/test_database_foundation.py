@@ -17,8 +17,15 @@ from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
-def test_database_configuration_requires_urls_without_echoing_values() -> None:
-    settings = Settings()
+def test_database_configuration_requires_urls_without_echoing_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Construct the absence being tested rather than inheriting it. `Settings()`
+    # reads the ambient environment, so this passed only on a machine where
+    # neither variable happened to be set -- and failed the moment the suite ran
+    # under the integration runner, which exports DATABASE_MIGRATION_URL for
+    # Alembic. The assertion was right; its precondition was accidental.
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_MIGRATION_URL", raising=False)
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
 
     with pytest.raises(RuntimeError) as application_error:
         settings.require_database_url()

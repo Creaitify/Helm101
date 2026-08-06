@@ -104,6 +104,25 @@ its assertion — or is skipped and reported as passing.
 
 **Smell:** a skipped test counted as a passing one.
 
+The larger version of this is a whole *group* that skips. In `helm-api`, two
+independent gates each silently skipped a group and each reported green:
+`testcontainers`/Docker being unavailable, and `HELM_TEST_DATABASE_URL` being
+unset. Between them they covered RLS, the SECURITY DEFINER keyholes, provisioning
+under a non-bypass role, and the tenant name coming from the database rather than
+being fabricated from the slug. Four of those tests had **never run**.
+
+Run `python scripts/run_integration_tests.py`, which starts a disposable
+container, points both switches at it, and sets `HELM_REQUIRE_INTEGRATION_TESTS=1`
+so a missing prerequisite fails instead of skipping. It found two real failures
+on its first run.
+
+One of those failures is worth its own note: `test_rls_integration.py` **refused
+to run** because the URL named a `BYPASSRLS` role. That refusal is correct and is
+the single most valuable assertion in the suite — RLS tests under a superuser
+prove nothing, and that is precisely how this project's RLS chicken-and-egg bug
+stayed hidden twice. Point such tests at a genuinely non-bypass role; do not
+weaken the guard to make them run.
+
 ### 7. Superuser hiding the failure
 
 Code that works as `postgres` and fails as `helm_app`. Every RLS test that

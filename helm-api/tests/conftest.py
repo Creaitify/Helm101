@@ -39,6 +39,49 @@ except ImportError:  # pragma: no cover - environment dependent
     DOCKER_IMPORTABLE = False
 
 
+def require_integration_tests() -> bool:
+    """Whether a missing Docker daemon must fail the run rather than skip it.
+
+    Read at call time, not import time, so a test can set the variable with
+    monkeypatch. Any value other than the unset/empty/"0" cases counts as on --
+    a CI file that writes "true" or "1" should both work.
+    """
+
+    return os.environ.get("HELM_REQUIRE_INTEGRATION_TESTS", "").strip().lower() not in {"", "0", "false", "no"}
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Refuse to start a strict run that could not possibly exercise the database.
+
+    The `skipif(not DOCKER_IMPORTABLE)` marks on the integration modules are
+    evaluated at import time, so they cannot consult a runtime helper. Checking
+    here instead fails the session immediately and with a clear reason, rather
+    than letting it finish green having quietly collected nothing.
+    """
+
+    del config  # required by the hook signature; the decision is environmental
+    if not require_integration_tests():
+        return
+    if not DOCKER_IMPORTABLE:
+        raise pytest.UsageError(
+            "HELM_REQUIRE_INTEGRATION_TESTS is set but testcontainers is not installed. "
+            "Install requirements-dev.txt; otherwise the integration modules skip at "
+            "collection and the run reports green without touching a database."
+        )
+    # A second, independent gate guards tests/test_tenants_endpoint.py's
+    # real-database group: `skipif(not HELM_TEST_DATABASE_URL)`. Strictness has
+    # to cover it too, or a "strict" run still silently skips the tests that
+    # prove the tenant name comes from the database rather than being fabricated
+    # from the slug -- a defect that was actually shipped in this project's
+    # plan text and caught in review. Those four had never run.
+    if not os.environ.get("HELM_TEST_DATABASE_URL", "").strip():
+        raise pytest.UsageError(
+            "HELM_REQUIRE_INTEGRATION_TESTS is set but HELM_TEST_DATABASE_URL is not. "
+            "The real-database proving tests skip without it. Point it at a DISPOSABLE "
+            "database only -- never a shared, staging, or production one."
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class SigningKey:
     """A test RSA keypair plus the JWKS document that publishes its public half."""
@@ -167,6 +210,24 @@ def postgres_url() -> Iterator[str]:
         container = PostgresContainer("postgres:16-alpine")
         container.start()
     except Exception as error:  # pragma: no cover - environment dependent
+        # A skip is the right default on a developer machine without Docker, but
+        # it is the wrong answer in CI: these are the only tests that exercise
+        # RLS, the SECURITY DEFINER keyholes, and provisioning under a genuinely
+        # non-bypass role. Every one of those has already hidden a real defect
+        # that unit tests could not see. Silently skipping them reports green for
+        # a suite that never ran its load-bearing half -- the same
+        # "skipped counted as passing" failure recorded as pattern 6 in
+        # docs/conventions/test-vacuity.md.
+        #
+        # Set HELM_REQUIRE_INTEGRATION_TESTS=1 wherever a green run is supposed
+        # to mean something, and an unavailable daemon becomes a failure.
+        if require_integration_tests():
+            pytest.fail(
+                "HELM_REQUIRE_INTEGRATION_TESTS is set but Docker is unavailable "
+                f"({type(error).__name__}). These tests cover RLS, the SECURITY DEFINER "
+                "keyholes, and provisioning under a non-bypass role; skipping them would "
+                "report green for a suite that never checked any of it."
+            )
         pytest.skip(f"Docker is not available for integration tests: {type(error).__name__}")
 
     try:
