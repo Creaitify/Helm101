@@ -25,7 +25,7 @@ interface TenantListResponse {
  */
 export async function listTenantsFromApi(): Promise<TenantSummary[]> {
   const session = await getServerSession(authOptions)
-  const accessToken = (session as { accessToken?: string } | null)?.accessToken
+  const accessToken = session?.accessToken
   if (!accessToken) throw new Error('The caller is not authenticated')
 
   try {
