@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -119,6 +120,23 @@ class Settings(BaseSettings):
         ]
         if missing:
             raise RuntimeError(f"OIDC configuration is incomplete; missing: {', '.join(missing)}")
+        if self.oidc_issuer is not None and self.oidc_jwks_url is not None:
+            # The issuer and its JWKS document must come from the same origin.
+            # A JWKS URL pasted from a different tenant produces the most
+            # confusing failure in this system: signatures verify against keys
+            # the real issuer never published, or fail with nothing to indicate
+            # the URL is the problem. Compare origins only -- the issuer's path
+            # and trailing slash are the issuer's business (Auth0 emits a
+            # trailing slash in `iss`, others do not) and this must stay
+            # provider-agnostic.
+            issuer_origin = urlsplit(self.oidc_issuer)
+            jwks_origin = urlsplit(self.oidc_jwks_url)
+            if (issuer_origin.scheme, issuer_origin.netloc) != (jwks_origin.scheme, jwks_origin.netloc):
+                raise RuntimeError(
+                    "OIDC_JWKS_URL must share an origin with OIDC_ISSUER; "
+                    "a JWKS document from a different host cannot hold the issuer's signing keys"
+                )
+
         if self.oidc_issuer is None or self.oidc_jwks_url is None or self.oidc_audience is None:
             # Unreachable: the `missing` check above already enforces this invariant.
             # An explicit raise (not `assert`) narrows the types for mypy without

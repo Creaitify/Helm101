@@ -119,6 +119,39 @@ before the code under test runs, not after.
 
 **Smell:** an isolation test that never checks what role it is connected as.
 
+### 8. The mutation that never applied
+
+The check itself can give a false negative. A `sed` or `str.replace` whose
+pattern does not match the source silently changes nothing, the suite passes,
+and it reads as "the mutation survived — my test is vacuous." It is not; the
+test was never exercised.
+
+This happened here twice in a row while verifying a secret-leak test, and led to
+rewriting a test that was already correct.
+
+**Fix:** assert the target exists before mutating, and confirm the file actually
+changed.
+
+```python
+assert old in source, "MUTATION TARGET NOT FOUND - would have been a no-op"
+```
+
+**Smell:** a mutation that "survives" a test you have good reason to believe is
+sound. Verify the mutation landed before concluding anything about the test.
+
+### 9. The fixture that cannot reach the branch
+
+A leak test supplied every key with a non-empty value, so the missing-key branch
+never executed — a value interpolated there would have gone unseen. The
+assertions were right; the fixture could not reach the code they guarded.
+
+**Fix:** exercise every branch that can produce the output you are checking.
+Assert the branch ran (`assert any("missing" in f.problem for f in findings)`),
+so the coverage cannot silently disappear.
+
+**Smell:** a test whose fixture is uniformly "all valid" or "all invalid" when
+the code has distinct branches for each.
+
 ## Reviewing
 
 - Run the mutation yourself. Do not accept "mutation-verified" on trust —

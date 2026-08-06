@@ -62,12 +62,37 @@ startup is worth far more than a 401 at first login that reads as broken auth.
 
 ## 4. Fill in `helm-api/.env`
 
+This file does not exist yet. Copy the template rather than writing one, so you
+inherit the database and CORS entries too:
+
+```bash
+cd helm-api && cp .env.example .env
+```
+
+Then set the OIDC block (`OIDC_AUDIENCE` and `OIDC_ALLOWED_ALGORITHMS` already
+carry the right defaults):
+
 ```
 OIDC_ISSUER=https://YOUR-TENANT.REGION.auth0.com/
 OIDC_JWKS_URL=https://YOUR-TENANT.REGION.auth0.com/.well-known/jwks.json
-OIDC_AUDIENCE=helm-api
-OIDC_ALLOWED_ALGORITHMS=["RS256"]
 ```
+
+`DATABASE_URL` must also be set, as a role that **cannot** bypass RLS — never
+`neondb_owner`, whose `rolbypassrls` silently disables tenant isolation.
+
+## 5. Check the configuration before trying to log in
+
+```bash
+cd helm-api && ./.venv/Scripts/python.exe -m app.cli.preflight
+```
+
+This validates what it can without contacting Auth0 — that all four `AUTH0_*`
+values are present, that the issuer and JWKS URL share an origin, that the
+trailing-slash asymmetry between the two services is correct, and that the
+audiences match. It reports key names and mismatches, never values.
+
+A clean preflight does not guarantee login works, but a failing one guarantees it
+will not, and tells you exactly which line to fix.
 
 ## The trailing-slash asymmetry
 
