@@ -53,6 +53,12 @@ HELM_API_BASE_URL=http://localhost:8000
 ```
 
 `.env.local` is git-ignored and already holds your real database values. Never commit it.
+`helm-app/.env.example` carries these same keys with empty values and inline notes.
+
+All four `AUTH0_*` values are required together. If `AUTH0_AUDIENCE` is missing the
+provider deliberately refuses to register, rather than requesting `audience: undefined`
+and receiving an opaque token that no JWKS can verify. A missing-config failure at
+startup is worth far more than a 401 at first login that reads as broken auth.
 
 ## 4. Fill in `helm-api/.env`
 
