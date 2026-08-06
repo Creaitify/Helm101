@@ -1,6 +1,7 @@
 import 'server-only'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/auth'
+import { cookies, headers } from 'next/headers'
+import { getToken } from 'next-auth/jwt'
+import { env } from './env'
 import { helmApiGet } from './helm-api-client'
 import { HelmApiError } from './helm-api-errors'
 
@@ -24,8 +25,21 @@ interface TenantListResponse {
  * identical to having access revoked.
  */
 export async function listTenantsFromApi(): Promise<TenantSummary[]> {
-  const session = await getServerSession(authOptions)
-  const accessToken = session?.accessToken
+  // Read the credential straight out of the encrypted session cookie rather
+  // than from `getServerSession()`. The session object is what next-auth serves
+  // as the body of `GET /api/auth/session`, so the access token deliberately is
+  // not on it (see the session callback in auth.ts). `getToken` decrypts the
+  // JWT in-process; the token never crosses a response boundary.
+  //
+  // In Next 16 `cookies()` and `headers()` are async: `cookies()` returns a
+  // store exposing `getAll()` and `headers()` returns a Web `Headers` -- both
+  // shapes `getToken`'s SessionStore already handles.
+  const [cookieStore, headerList] = await Promise.all([cookies(), headers()])
+  const token = await getToken({
+    req: { cookies: cookieStore, headers: headerList } as never,
+    secret: env.authSecret,
+  })
+  const accessToken = token?.accessToken
   if (!accessToken) throw new Error('The caller is not authenticated')
 
   try {

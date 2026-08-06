@@ -4,10 +4,12 @@ A vacuous test is one that passes whether or not the behaviour it names exists.
 It is worse than no test, because it occupies the space where a real test would
 go and reports green while doing it.
 
-Seven have been found in this repository so far. Every one was caught by a
+Ten have been found in this repository so far. Every one was caught by a
 reviewer after the code was written, never by the person writing it. One of them
 — `expect(sql).toMatch(/set search_path = public/i)` — sat on top of a live,
-exploitable privilege-escalation hole and certified it as fixed.
+exploitable privilege-escalation hole and certified it as fixed. Another was a
+whole test file that asserted a credential leak *was* the intended behaviour, so
+the suite went green while shipping the vulnerability it was written to prevent.
 
 This is the checklist that would have caught them.
 
@@ -151,6 +153,34 @@ so the coverage cannot silently disappear.
 
 **Smell:** a test whose fixture is uniformly "all valid" or "all invalid" when
 the code has distinct branches for each.
+
+### 10. The test that specifies the defect
+
+The worst case, because every other pattern here is a test that proves nothing —
+this is a test that proves the wrong thing, confidently.
+
+`test/auth-token-propagation.test.ts` asserted, in a test named *"exposes the
+access token and subject on the session"*, that the Auth0 access token **was**
+present on the session object. It was thorough, non-vacuous by every check above,
+and mutation-verified. It was also asserting a critical vulnerability: next-auth
+serves the session object as the body of `GET /api/auth/session`, so that test
+demanded the only credential the API accepts be published to the browser.
+
+The type declaration agreed with it (`interface Session { accessToken?: string }`),
+so TypeScript enforced the leak too. Both came from the same plan text, so the
+plan, the implementation, the types, and the tests were consistent — and all four
+were wrong together.
+
+No mutation finds this. The test fails when the leak is *removed*.
+
+**Fix:** for any assertion about where a credential goes, ask what the test would
+demand if it were inverted, and which direction is actually safe. A test that
+says a secret is *present* somewhere deserves the question "who can read that?"
+
+**Smell:** a test asserting a credential, token, or key appears in a structure
+that crosses a trust boundary — a response body, a client component prop, a log
+line, a serialized cache entry. Consistency between the plan, the types, and the
+tests is not evidence; they often share one author and one mistake.
 
 ## Reviewing
 

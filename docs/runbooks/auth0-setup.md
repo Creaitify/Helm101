@@ -105,16 +105,21 @@ a token that verifies cryptographically and is then rejected for wrong issuer.
 
 ## What happens next
 
-Once those values are in place, Tasks 2 and 8 can run:
+The Auth0 provider is already built and committed. Once your values are in place, the
+only remaining work is the end-to-end verification below: wire both services, provision
+yourself as a real user, and confirm sign-in.
 
-- **Task 2** adds the Auth0 provider to `auth.ts` and carries the **access token** (not the
-  ID token) into the session. Only the access token bears the `aud: helm-api` claim
-  FastAPI requires; an ID token presented to FastAPI is correctly rejected as
-  wrong-audience. Task 2 must also remove the temporary cast at
-  `helm-app/lib/server/tenant-directory.ts:28`, which exists only because the session
-  type augmentation doesn't land until then.
-- **Task 8** wires both services, provisions you as a real user, and verifies sign-in end
-  to end.
+Two design points worth knowing, because both are easy to "fix" into a defect:
+
+- **The access token is what reaches FastAPI**, not the ID token. Only the access token
+  bears the `aud: helm-api` claim; an ID token verifies against the same JWKS and is then
+  correctly rejected as wrong-audience, which reads as broken auth rather than the wrong
+  credential.
+- **The access token is deliberately absent from the session object.** next-auth serves
+  the session verbatim as the body of `GET /api/auth/session`, which any script on a
+  signed-in page can read. Putting the token there would publish the only credential
+  FastAPI accepts to the browser and defeat the BFF pattern. Server code reads it with
+  `getToken()` instead, which decrypts the cookie in-process. Four tests enforce this.
 
 ## Provisioning yourself
 

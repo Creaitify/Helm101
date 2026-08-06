@@ -63,9 +63,19 @@ export const authOptions: NextAuthOptions = {
       return token
     },
     session({ session, token }) {
+      // Whatever this returns becomes the JSON body of `GET /api/auth/session`
+      // (next-auth v4 `core/routes/session.js`: `response.body = updatedSession`),
+      // which any script on a signed-in page can read. So NOTHING placed here is
+      // a secret. In particular `token.accessToken` must never be copied across:
+      // it is the only credential FastAPI accepts, and copying it out of the
+      // encrypted session cookie into a readable body would defeat the BFF
+      // pattern this app is built on. Server code reads it with `getToken()`
+      // from `next-auth/jwt` instead -- see lib/server/tenant-directory.ts.
+      //
+      // `sub` and the user id are already known to the signed-in user and grant
+      // nothing on their own, so they stay.
       if (session.user && token.sub) session.user.id = token.sub
       if (session.user) session.user.identitySubject = token.identitySubject
-      session.accessToken = token.accessToken
       return session
     },
   },

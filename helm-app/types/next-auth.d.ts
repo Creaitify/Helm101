@@ -7,10 +7,14 @@ declare module 'next-auth' {
     identitySubject?: string
   }
 
-  /** The Auth0 access token is the only credential FastAPI accepts. */
+  /**
+   * The session is served verbatim as the body of `GET /api/auth/session`, so
+   * it must never declare a credential field. The Auth0 access token -- the
+   * only credential FastAPI accepts -- lives on the `JWT` below, inside the
+   * encrypted cookie, and is read server-side via `getToken()`.
+   */
   interface Session {
     user: User
-    accessToken?: string
     error?: 'token_expired'
   }
 }
