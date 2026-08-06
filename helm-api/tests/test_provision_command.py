@@ -229,6 +229,96 @@ async def test_membership_insert_survives_a_non_bypass_rls_role(
 
 
 @pytest.mark.asyncio
+async def test_tenant_lookup_keyhole_is_not_executable_by_public(engine: AsyncEngine) -> None:
+    """`helm_lookup_active_tenant_by_slug` must not be callable by PUBLIC.
+
+    PostgreSQL grants EXECUTE to PUBLIC on every newly created function by
+    default, so the privilege lockdown here is entirely the work of
+    `20260805_05_tenant_lookup_by_slug_function.py`'s
+    `revoke all on function ... from public` -- delete that one line and the
+    function silently reverts to world-executable.
+
+    That is not a cosmetic privilege: the function is a deliberate
+    `SECURITY DEFINER` bypass of `tenants`' FORCE ROW LEVEL SECURITY. It exists
+    precisely because there is no pre-context way to resolve a slug to a tenant
+    id. If PUBLIC held EXECUTE, any role that can merely connect -- including
+    one with no grants on `tenants` at all -- could resolve an arbitrary tenant
+    slug to its real UUID, which is the value `app.tenant_id` is set from.
+
+    `helm_tenant_id()` (20260727_01_foundation.py) is asserted alongside as a
+    positive control. It has no revoke, so it must still be PUBLIC-executable.
+    Without that control this test would pass just as happily against a
+    database where `has_function_privilege` always returned False, or where
+    every function had been locked down for some unrelated reason -- it would
+    then prove nothing about this migration's own revoke.
+    """
+
+    async with engine.connect() as connection:
+        keyhole_public = await connection.scalar(
+            text("select has_function_privilege('public', 'helm_lookup_active_tenant_by_slug(text)', 'execute')")
+        )
+        control_public = await connection.scalar(
+            text("select has_function_privilege('public', 'helm_tenant_id()', 'execute')")
+        )
+
+    assert control_public is True, (
+        "helm_tenant_id() carries no REVOKE and must remain PUBLIC-executable; if this is False "
+        "the assertion below cannot distinguish a working revoke from a broken probe"
+    )
+    assert keyhole_public is False, (
+        "PUBLIC holds EXECUTE on helm_lookup_active_tenant_by_slug -- the "
+        "'revoke all on function ... from public' in 20260805_05 has been removed or did not run. "
+        "Any role that can connect can now resolve an arbitrary tenant slug to its UUID, "
+        "bypassing FORCE RLS on tenants."
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_archived_tenant_cannot_be_provisioned_into(
+    engine: AsyncEngine, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    """A non-active tenant must not resolve, so no member can be added to it.
+
+    `helm_lookup_active_tenant_by_slug` filters `and t.status = 'active'`.
+    Every other test in this module uses the `provisioned_tenant` fixture,
+    which is always `'active'` -- so that filter could be deleted outright and
+    the rest of this file would stay green (vacuity pattern 9: the fixture
+    cannot reach the branch). This test supplies the case the fixture cannot.
+    """
+
+    tenant_id = uuid4()
+    slug = f"archived-{tenant_id.hex[:8]}"
+    async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                "insert into tenants (id, slug, name, plan, status) "
+                "values (:id, :slug, 'Archived', 'test', 'archived')"
+            ),
+            {"id": str(tenant_id), "slug": slug},
+        )
+
+    # Precondition: the row really is there and really is non-active, so a
+    # LookupError below means "the status filter refused it", not "the insert
+    # silently failed and the slug does not exist at all".
+    async with engine.connect() as connection:
+        stored_status = await connection.scalar(
+            text("select status from tenants where id = :id"), {"id": str(tenant_id)}
+        )
+    assert str(stored_status) == "archived", f"fixture tenant is {stored_status!r}, not archived"
+
+    async with session_factory() as session:
+        with pytest.raises(LookupError):
+            await provision_member(
+                session,
+                issuer="https://helm.eu.auth0.com/",
+                subject="auth0|archived",
+                email="person@agency.test",
+                tenant_slug=slug,
+                role=MembershipRole.OWNER,
+            )
+
+
+@pytest.mark.asyncio
 async def test_tenant_lookup_ignores_a_shadowing_temp_table(engine: AsyncEngine) -> None:
     """Prove `helm_lookup_active_tenant_by_slug` cannot be tricked by a `pg_temp` shadow table.
 

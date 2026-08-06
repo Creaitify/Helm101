@@ -138,6 +138,21 @@ changed.
 assert old in source, "MUTATION TARGET NOT FOUND - would have been a no-op"
 ```
 
+**Existence is not enough — check the count.** These files document their own
+reasoning, so `set search_path = public, pg_temp` appears twice in each: once
+inside a `--` comment, once as the real DDL. A single-replacement mutation
+(`replace(old, new, 1)`, `sed` without an anchor) hits the *comment* and leaves
+the DDL untouched. The suite passes, and it reads as "the security assertion is
+vacuous" — a conclusion that would condemn a sound fix.
+
+This happened during the review of this very branch. Anchor the mutation to the
+line that matters (`^set search_path`), or assert the occurrence count and mutate
+all of them:
+
+```python
+assert source.count(old) == 1, f"{source.count(old)} occurrences - anchor the mutation"
+```
+
 **Smell:** a mutation that "survives" a test you have good reason to believe is
 sound. Verify the mutation landed before concluding anything about the test.
 

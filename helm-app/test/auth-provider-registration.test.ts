@@ -97,11 +97,55 @@ describe('Auth0 provider registration', () => {
     expect(ids).toEqual(expect.arrayContaining(['google', 'azure-ad', 'auth0']))
   })
 
-  it('never exposes the client secret through a provider id or name', async () => {
+  /**
+   * Collect every path in `value` whose string content contains `needle`.
+   *
+   * Walking the whole object matters: the previous version of the test below
+   * asserted only on `provider.id` and `provider.name`, which are NextAuth's
+   * own constants ('auth0'/'Auth0'). Nothing in this branch sets them, so the
+   * assertion could not fail for the reason its name claimed — injecting the
+   * real secret into the provider name survived it.
+   */
+  function pathsContaining(value: unknown, needle: string, path = ''): string[] {
+    if (typeof value === 'string') return value.includes(needle) ? [path] : []
+    if (typeof value === 'function') return []
+    if (value === null || typeof value !== 'object') return []
+    return Object.entries(value as Record<string, unknown>).flatMap(([key, child]) =>
+      pathsContaining(child, needle, path ? `${path}.${key}` : key),
+    )
+  }
+
+  // The secret is SUPPOSED to be at options.clientSecret — that is the field
+  // NextAuth exchanges the authorization code with, server-side, and a provider
+  // without it cannot complete a login. So "the secret appears nowhere" would be
+  // a false claim. What must hold is that it appears at that one place and
+  // nowhere else: any second occurrence is a copy in a field with different
+  // exposure (`id` and `name` are rendered into the sign-in page, `authorization`
+  // is serialized into the URL the browser is redirected to).
+  it('carries the client secret at exactly one path, options.clientSecret', async () => {
     const options = await loadAuthOptions(AUTH0_ENV)
     const provider = auth0Provider(options.providers)
 
-    expect(provider!.id).toBe('auth0')
-    expect(provider!.name).not.toContain('client-secret-value')
+    const paths = pathsContaining(provider, 'client-secret-value')
+
+    // Positive control: the walk really can find the secret. Without this the
+    // assertion below would pass just as happily against a broken walker that
+    // returned [] for everything.
+    expect(paths).toContain('options.clientSecret')
+    expect(paths).toEqual(['options.clientSecret'])
+  })
+
+  it('does not put the client secret in the authorization request sent to the browser', async () => {
+    const options = await loadAuthOptions(AUTH0_ENV)
+    const provider = auth0Provider(options.providers)
+
+    // Narrower restatement of the above, aimed at the specific field that
+    // crosses the trust boundary: `authorization` becomes the query string of
+    // the redirect the user's browser follows.
+    const authorization = JSON.stringify(provider!.options?.authorization ?? null)
+    expect(authorization).not.toContain('client-secret-value')
+    // Non-vacuous: `authorization` is a populated object, not null/undefined,
+    // so the assertion above is examining real content.
+    expect(authorization).toContain('helm-api')
   })
 })

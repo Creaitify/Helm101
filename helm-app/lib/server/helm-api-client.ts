@@ -48,7 +48,13 @@ export async function helmApiGet<T>(request: HelmApiRequest): Promise<T> {
     response = await fetch(url, {
       method: 'GET',
       headers,
-      signal: request.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      // `??` here would let a caller-supplied signal REPLACE the timeout rather
+      // than compose with it, silently removing the render-blocking guarantee
+      // above for the first caller that passes one. `AbortSignal.any` aborts on
+      // whichever fires first, so the timeout always applies.
+      signal: request.signal
+        ? AbortSignal.any([request.signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)])
+        : AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       cache: 'no-store',
     })
   } catch {
@@ -61,5 +67,13 @@ export async function helmApiGet<T>(request: HelmApiRequest): Promise<T> {
     throw translateProblem(response.status, await readBody(response))
   }
 
-  return (await response.json()) as T
+  try {
+    return (await response.json()) as T
+  } catch {
+    // A 200 with a non-JSON body (a proxy's HTML error page, a truncated
+    // response) must not escape as a raw SyntaxError: that error's message
+    // embeds the response body verbatim, which is exactly the leak the
+    // !ok path already guards against via readBody.
+    throw new HelmApiError(502, 'upstream_invalid_response', true)
+  }
 }
