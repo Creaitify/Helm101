@@ -23,7 +23,7 @@
  * get an exact oracle — this coarse model plus the concrete examples above is the tradeoff.
  */
 import { describe, it, expect } from 'vitest'
-import { config } from '@/middleware'
+import { config } from '@/proxy'
 
 function matches(pathname: string): boolean {
   return config.matcher.some((pattern) => new RegExp(`^${pattern}$`).test(pathname))

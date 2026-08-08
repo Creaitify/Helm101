@@ -6,18 +6,11 @@ stays green on machines without a running daemon.
 
 from __future__ import annotations
 
-import asyncio
-import os
-import secrets
-import subprocess
-import sys
-from collections.abc import AsyncIterator, Callable, Iterator
-from pathlib import Path
+from collections.abc import Callable
 from uuid import UUID, uuid4
 
 import httpx
 import pytest
-import pytest_asyncio
 from app.auth.errors import NoMembershipError
 from app.auth.jwt_verifier import JwtVerifier
 from app.auth.membership import build_caller, select_membership
@@ -34,22 +27,15 @@ from app.main import create_app
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from tests.conftest import TEST_AUDIENCE, SigningKey
-
-PROJECT_ROOT = Path(__file__).parents[1]
-
-try:
-    from testcontainers.postgres import PostgresContainer
-
-    DOCKER_IMPORTABLE = True
-except ImportError:  # pragma: no cover - environment dependent
-    DOCKER_IMPORTABLE = False
+from tests.conftest import (
+    DOCKER_IMPORTABLE,
+    NON_BYPASS_PASSWORD,
+    NON_BYPASS_ROLE,
+    TEST_AUDIENCE,
+    SigningKey,
+)
 
 pytestmark = pytest.mark.skipif(not DOCKER_IMPORTABLE, reason="testcontainers is not installed")
-
-
-NON_BYPASS_ROLE = "helm_app_role"
-NON_BYPASS_PASSWORD = secrets.token_hex(16)
 
 SEED_ISSUER = "https://issuer.test"
 
@@ -58,96 +44,6 @@ def _seed_subject(user_id: UUID) -> str:
     """Return the deterministic identity_subject `_seed` assigns to a seeded user."""
 
     return f"subject-{user_id}"
-
-
-async def _provision_non_bypass_role(superuser_url: str) -> None:
-    """Create a login role without SUPERUSER/BYPASSRLS so RLS assertions are real.
-
-    testcontainers' default PostgreSQL user is a superuser, and superusers
-    implicitly bypass row-level security regardless of table policies. Without
-    this role, the cross-tenant RLS test could only ever observe rows because
-    the connection ignores every policy, not because isolation holds.
-    """
-
-    engine = create_async_engine(superuser_url, pool_pre_ping=True)
-    try:
-        async with engine.begin() as connection:
-            await connection.execute(
-                text(
-                    f"create role {NON_BYPASS_ROLE} login nosuperuser nobypassrls "
-                    f"password '{NON_BYPASS_PASSWORD}'"
-                )
-            )
-            await connection.execute(text(f"grant all privileges on all tables in schema public to {NON_BYPASS_ROLE}"))
-            await connection.execute(
-                text(f"grant all privileges on all sequences in schema public to {NON_BYPASS_ROLE}")
-            )
-            await connection.execute(
-                text(
-                    "grant execute on function helm_lookup_active_memberships(text, text) "
-                    f"to {NON_BYPASS_ROLE}"
-                )
-            )
-    finally:
-        await engine.dispose()
-
-
-@pytest.fixture(scope="module")
-def postgres_url() -> Iterator[str]:
-    """Start a disposable PostgreSQL container and migrate it to head.
-
-    Yields the superuser connection URL testcontainers provisions by default.
-    Most tests in this file still use that superuser connection (via the
-    `engine` fixture) for setup and assertions that are not themselves proving
-    an RLS property, matching test_tenants_endpoint.py's pg_engine. That is a
-    convenience for fixture setup, not a workaround for a gap: the production
-    request path (app/api/deps.py::current_caller, via
-    IdentityRepository.list_active_memberships) now resolves memberships
-    through `helm_lookup_active_memberships`, a narrow SECURITY DEFINER
-    function (alembic/versions/20260805_04_membership_lookup_function.py,
-    adapted from the precedent in
-    helm-app/db/migrations/0008_membership_lookup_all.sql) that works
-    correctly under a genuinely non-bypass role. That is proved directly by
-    test_membership_resolution_works_under_non_bypass_role below, which
-    connects as the provisioned non-bypass role, not the superuser.
-    """
-
-    try:
-        container = PostgresContainer("postgres:16-alpine")
-        container.start()
-    except Exception as error:  # pragma: no cover - environment dependent
-        pytest.skip(f"Docker is not available for integration tests: {type(error).__name__}")
-
-    try:
-        sync_url = container.get_connection_url()
-        async_url = sync_url.replace("postgresql+psycopg2://", "postgresql+asyncpg://")
-        environment = os.environ.copy()
-        environment["DATABASE_MIGRATION_URL"] = async_url
-        result = subprocess.run(
-            [sys.executable, "-m", "alembic", "upgrade", "head"],
-            cwd=PROJECT_ROOT,
-            env=environment,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            pytest.fail(f"Alembic could not migrate the container database: {result.stderr[-800:]}")
-        asyncio.run(_provision_non_bypass_role(async_url))
-        yield async_url
-    finally:
-        container.stop()
-
-
-@pytest_asyncio.fixture
-async def engine(postgres_url: str) -> AsyncIterator[AsyncEngine]:
-    """A per-test engine bound to the container's superuser connection URL."""
-
-    database_engine = create_async_engine(postgres_url, pool_pre_ping=True)
-    try:
-        yield database_engine
-    finally:
-        await database_engine.dispose()
 
 
 def _non_bypass_url(superuser_url: str) -> str:

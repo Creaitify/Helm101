@@ -376,6 +376,34 @@ tbody tr:hover{background:var(--card-2)}
 .login-card h1 { margin: 0; font-size: 28px; letter-spacing: -0.02em; }
 .login-card p { margin: 0 0 8px; color: var(--faint); font-size: 14px; line-height: 1.5; }
 
+.login-form { display: flex; flex-direction: column; gap: 12px; }
+.login-field {
+  display: flex; flex-direction: column; gap: 6px;
+  font-size: 13px; font-weight: 600; color: var(--dim);
+}
+.login-field input {
+  background: var(--card-2); color: var(--text); border: 1px solid var(--line);
+  border-radius: 8px; padding: 9px 11px; font-size: 14px; font-family: inherit; font-weight: 400;
+}
+.login-field input:focus-visible { outline: 2px solid var(--accent, #5b8def); outline-offset: 1px; }
+/* Reserves no space when empty, so an error does not shift the form as it
+   appears -- but stays in the DOM so `role="alert"` announces into an existing
+   region rather than a newly inserted one. */
+.login-error { margin: 0; min-height: 0; color: #e5534b; font-size: 13px; line-height: 1.4; }
+.login-error:empty { display: none; }
+.login-divider {
+  display: flex; align-items: center; gap: 10px;
+  margin: 2px 0; color: var(--faint); font-size: 12px; text-transform: uppercase;
+}
+.login-divider::before, .login-divider::after {
+  content: ''; flex: 1; height: 1px; background: var(--line);
+}
+.login-switch { margin: 4px 0 0; font-size: 13px; color: var(--faint); text-align: center; }
+.login-link {
+  background: none; border: 0; padding: 0; font: inherit; color: var(--text);
+  text-decoration: underline; cursor: pointer;
+}
+
 .tenant-switcher {
   background: var(--panel); color: var(--text); border: 1px solid var(--line);
   border-radius: 8px; padding: 6px 10px; font-size: 13px; font-family: inherit;

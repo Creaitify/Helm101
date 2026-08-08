@@ -30,6 +30,32 @@ def test_require_oidc_rejects_partial_configuration() -> None:
         _settings(oidc_jwks_url=None).require_oidc()
 
 
+def test_jwks_url_from_a_different_host_is_refused() -> None:
+    """A JWKS document from another origin cannot hold this issuer's keys."""
+
+    with pytest.raises(RuntimeError, match="share an origin"):
+        _settings(oidc_jwks_url="https://attacker.test/jwks").require_oidc()
+
+
+def test_jwks_url_on_a_different_scheme_is_refused() -> None:
+    with pytest.raises(RuntimeError, match="share an origin"):
+        _settings(oidc_jwks_url="http://issuer.test/jwks").require_oidc()
+
+
+def test_trailing_slash_on_the_issuer_is_accepted() -> None:
+    """Auth0's `iss` carries a trailing slash; other issuers omit it.
+
+    The origin check must not turn that difference into a startup failure --
+    the issuer's path is the issuer's business, and this stays provider-agnostic.
+    """
+
+    oidc = _settings(
+        oidc_issuer="https://issuer.test/",
+        oidc_jwks_url="https://issuer.test/.well-known/jwks.json",
+    ).require_oidc()
+    assert oidc.issuer == "https://issuer.test/"
+
+
 def test_symmetric_algorithms_are_refused() -> None:
     with pytest.raises(ValueError, match="asymmetric"):
         _settings(oidc_allowed_algorithms=["HS256"])

@@ -25,6 +25,22 @@ class MembershipRow:
     scope_restrictions: list[str]
 
 
+@dataclass(frozen=True, slots=True)
+class TenantLookupRow:
+    """An active tenant's public identifying columns, resolved before tenant context exists.
+
+    No `status` field: `helm_lookup_active_tenant_by_slug` already filters to
+    `status = 'active'` in SQL, so a row reaching this dataclass is always
+    active by construction. Carrying a redundant `status` here would invite a
+    future reader to relax the SQL filter on the belief that the Python side
+    re-checks it -- it does not, and should not need to.
+    """
+
+    id: UUID
+    slug: str
+    name: str
+
+
 class IdentityRepository:
     """Reads identity and membership rows.
 
@@ -86,3 +102,30 @@ class IdentityRepository:
             )
             for row in result.all()
         ]
+
+    async def find_active_tenant_by_slug(self, session: AsyncSession, slug: str) -> TenantLookupRow | None:
+        """Resolve an active tenant by slug before any tenant context exists.
+
+        `tenants` is `FORCE ROW LEVEL SECURITY` with `id = helm_tenant_id()`,
+        which admits no rows while `app.tenant_id` is unset -- and choosing
+        which tenant to act in (here: which tenant `app.cli.provision`
+        provisions a membership into) is necessarily a pre-context operation.
+        Calls `helm_lookup_active_tenant_by_slug`, a narrow `SECURITY DEFINER`
+        function (`alembic/versions/20260805_05_tenant_lookup_by_slug_function.py`)
+        that mirrors `list_active_memberships`'s use of
+        `helm_lookup_active_memberships` for the same reason.
+
+        CLI-only today: `app.cli.provision` is the only caller, and it is run
+        by an operator, not driven by request input. Exposing this method (or
+        the underlying function) on an HTTP surface would make every tenant
+        slug enumerable to any authenticated caller via a distinguishable
+        found/not-found response -- do not wire it into a request path
+        without deliberately deciding that tradeoff first.
+        """
+
+        statement = text("select id, slug, name, status from helm_lookup_active_tenant_by_slug(:slug)")
+        result = await session.execute(statement, {"slug": slug})
+        row = result.first()
+        if row is None:
+            return None
+        return TenantLookupRow(id=row.id, slug=row.slug, name=row.name)

@@ -75,23 +75,38 @@ server-side:
 .\.venv\Scripts\python.exe -m mypy app
 ```
 
-The red-team matrix in `tests/test_identity_integration.py` runs against a
-disposable PostgreSQL container and covers cross-tenant denial, immediate
-membership revocation, scope denial, audit atomicity, and membership
-resolution under a non-bypass role. It skips when Docker is unavailable; run
-it with Docker started before merging security-relevant changes.
+**`pytest` alone does not run the database tests.** Two independent gates skip
+them silently, and both report green: `testcontainers`/Docker being unavailable,
+and `HELM_TEST_DATABASE_URL` being unset. Between them they cover RLS, the
+`SECURITY DEFINER` keyholes, provisioning under a non-bypass role, and the tenant
+name coming from the database rather than being fabricated from the slug. Before
+this was fixed, four of those tests had never run at all.
 
-The container integration tests require `testcontainers` (included in
-`requirements-dev.txt`) and Docker to be running. They query FORCE-RLS tables
-without a pre-set tenant context to verify that the database isolation holds
-under a non-superuser role. To run them explicitly:
+Run the full suite with nothing skipped:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests/test_identity_integration.py -v
+.\.venv\Scripts\python.exe scripts\run_integration_tests.py -q
 ```
 
-Some tests are additionally gated on `HELM_TEST_DATABASE_URL`; never point this
-at a shared, staging, or production database.
+That starts one disposable container, migrates it, provisions the non-bypass
+application role, points both switches at it, and sets
+`HELM_REQUIRE_INTEGRATION_TESTS=1` so a missing prerequisite **fails** instead of
+skipping. Use it before merging anything security-relevant, and in CI. Extra
+arguments pass through to pytest.
+
+Set `HELM_REQUIRE_INTEGRATION_TESTS=1` on its own wherever a green run is meant
+to mean something; the session then refuses to start rather than finishing green
+having collected nothing.
+
+The red-team matrix in `tests/test_identity_integration.py` covers cross-tenant
+denial, immediate membership revocation, scope denial, audit atomicity, and
+membership resolution under a non-bypass role.
+
+`HELM_TEST_DATABASE_URL` must name a **disposable** database — never a shared,
+staging, or production one — and must **not** authenticate as a superuser or any
+`BYPASSRLS` role. `tests/test_rls_integration.py` refuses to run against one, and
+that refusal is deliberate: RLS assertions under a bypassing role prove nothing,
+which is how this project's RLS chicken-and-egg bug stayed hidden twice.
 
 ### Membership resolution under a non-bypass role
 

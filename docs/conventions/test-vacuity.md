@@ -1,0 +1,236 @@
+# Tests that pass for the wrong reason
+
+A vacuous test is one that passes whether or not the behaviour it names exists.
+It is worse than no test, because it occupies the space where a real test would
+go and reports green while doing it.
+
+Ten have been found in this repository so far. Every one was caught by a
+reviewer after the code was written, never by the person writing it. One of them
+— `expect(sql).toMatch(/set search_path = public/i)` — sat on top of a live,
+exploitable privilege-escalation hole and certified it as fixed. Another was a
+whole test file that asserted a credential leak *was* the intended behaviour, so
+the suite went green while shipping the vulnerability it was written to prevent.
+
+This is the checklist that would have caught them.
+
+## The one question
+
+> **If I break the implementation, does this test fail?**
+
+Not "would it probably fail". Actually break it, run the test, watch it go red,
+then revert. This is the only reliable check, and it takes under a minute.
+
+Anything below is a shortcut for spotting likely candidates. The mutation is the
+proof.
+
+## Known patterns, all found here
+
+### 1. The unanchored substring match
+
+```ts
+expect(sql).toMatch(/set search_path = public/i)   // passes on `public, pg_temp` too
+```
+
+`toMatch` searches anywhere in the string. The hardened form contains the
+vulnerable form as a prefix, so the assertion cannot distinguish them. It was
+named "pins search_path (mandatory for a security definer function)".
+
+**Fix:** assert the exact declaration, and assert position separately when order
+carries meaning.
+
+**Smell:** a regex on a security property that has no `^`, `$`, or exact match.
+
+### 2. Serializing something that does not serialize
+
+```ts
+expect(JSON.stringify(error)).not.toContain('secret')
+```
+
+`Error.prototype.message` is non-enumerable, so `JSON.stringify(new Error(x))` is
+`'{}'` — always. The assertion passes with or without a leak.
+
+**Fix:** serialize the fields you actually care about
+(`JSON.stringify({ code, message })`), or assert on the property directly.
+
+**Smell:** `JSON.stringify` applied to anything that is not a plain object.
+
+### 3. The same literal as fixture and assertion
+
+```ts
+const session = { accessToken: 'token-value' }
+expect(client).toHaveBeenCalledWith({ accessToken: 'token-value' })
+```
+
+An implementation that hardcodes `'token-value'` and ignores the session passes.
+So does one that reads the wrong field, if both fields hold the same value.
+
+**Fix:** distinct, non-substitutable values across at least two invocations —
+`token-alpha` and `token-beta` with `toHaveBeenNthCalledWith(1, …)` / `(2, …)`.
+
+**Smell:** one literal appearing in both the setup and the expectation.
+
+### 4. The guard that cannot fire
+
+A `require_scope` test where every role in the fixture set holds the scope. The
+403 branch is unreachable, so the guard could be deleted entirely and the suite
+stays green.
+
+**Fix:** include a subject that must be refused.
+
+**Smell:** a permission test with no negative case.
+
+### 5. Asserting the database, not your code
+
+```ts
+await raw('insert into audit_log …')
+await session.rollback()
+expect(await count()).toBe(0)
+```
+
+This proves PostgreSQL implements ROLLBACK. It says nothing about whether *your*
+audit path is atomic.
+
+**Fix:** drive the real code path and inject the failure inside it.
+
+**Smell:** the test never calls the function whose name is in the test's title.
+
+### 6. The setup that dies before the assertion
+
+A seed helper that sets `app.tenant_id` to `''` makes `helm_tenant_id()` return
+NULL, so every insert fails `WITH CHECK` and the test errors out before reaching
+its assertion — or is skipped and reported as passing.
+
+**Fix:** assert your preconditions hold before exercising the code under test.
+
+**Smell:** a skipped test counted as a passing one.
+
+The larger version of this is a whole *group* that skips. In `helm-api`, two
+independent gates each silently skipped a group and each reported green:
+`testcontainers`/Docker being unavailable, and `HELM_TEST_DATABASE_URL` being
+unset. Between them they covered RLS, the SECURITY DEFINER keyholes, provisioning
+under a non-bypass role, and the tenant name coming from the database rather than
+being fabricated from the slug. Four of those tests had **never run**.
+
+Run `python scripts/run_integration_tests.py`, which starts a disposable
+container, points both switches at it, and sets `HELM_REQUIRE_INTEGRATION_TESTS=1`
+so a missing prerequisite fails instead of skipping. It found two real failures
+on its first run.
+
+One of those failures is worth its own note: `test_rls_integration.py` **refused
+to run** because the URL named a `BYPASSRLS` role. That refusal is correct and is
+the single most valuable assertion in the suite — RLS tests under a superuser
+prove nothing, and that is precisely how this project's RLS chicken-and-egg bug
+stayed hidden twice. Point such tests at a genuinely non-bypass role; do not
+weaken the guard to make them run.
+
+### 7. Superuser hiding the failure
+
+Code that works as `postgres` and fails as `helm_app`. Every RLS test that
+connects with an implicit `BYPASSRLS` role proves nothing about isolation. Found
+twice here, both times masking a total failure of the only path a human uses to
+enter the system.
+
+**Fix:**
+
+```python
+assert (rolbypassrls, rolsuper) == (False, False)
+```
+
+before the code under test runs, not after.
+
+**Smell:** an isolation test that never checks what role it is connected as.
+
+### 8. The mutation that never applied
+
+The check itself can give a false negative. A `sed` or `str.replace` whose
+pattern does not match the source silently changes nothing, the suite passes,
+and it reads as "the mutation survived — my test is vacuous." It is not; the
+test was never exercised.
+
+This happened here twice in a row while verifying a secret-leak test, and led to
+rewriting a test that was already correct.
+
+**Fix:** assert the target exists before mutating, and confirm the file actually
+changed.
+
+```python
+assert old in source, "MUTATION TARGET NOT FOUND - would have been a no-op"
+```
+
+**Existence is not enough — check the count.** These files document their own
+reasoning, so `set search_path = public, pg_temp` appears twice in each: once
+inside a `--` comment, once as the real DDL. A single-replacement mutation
+(`replace(old, new, 1)`, `sed` without an anchor) hits the *comment* and leaves
+the DDL untouched. The suite passes, and it reads as "the security assertion is
+vacuous" — a conclusion that would condemn a sound fix.
+
+This happened during the review of this very branch. Anchor the mutation to the
+line that matters (`^set search_path`), or assert the occurrence count and mutate
+all of them:
+
+```python
+assert source.count(old) == 1, f"{source.count(old)} occurrences - anchor the mutation"
+```
+
+**Smell:** a mutation that "survives" a test you have good reason to believe is
+sound. Verify the mutation landed before concluding anything about the test.
+
+### 9. The fixture that cannot reach the branch
+
+A leak test supplied every key with a non-empty value, so the missing-key branch
+never executed — a value interpolated there would have gone unseen. The
+assertions were right; the fixture could not reach the code they guarded.
+
+**Fix:** exercise every branch that can produce the output you are checking.
+Assert the branch ran (`assert any("missing" in f.problem for f in findings)`),
+so the coverage cannot silently disappear.
+
+**Smell:** a test whose fixture is uniformly "all valid" or "all invalid" when
+the code has distinct branches for each.
+
+### 10. The test that specifies the defect
+
+The worst case, because every other pattern here is a test that proves nothing —
+this is a test that proves the wrong thing, confidently.
+
+`test/auth-token-propagation.test.ts` asserted, in a test named *"exposes the
+access token and subject on the session"*, that the Auth0 access token **was**
+present on the session object. It was thorough, non-vacuous by every check above,
+and mutation-verified. It was also asserting a critical vulnerability: next-auth
+serves the session object as the body of `GET /api/auth/session`, so that test
+demanded the only credential the API accepts be published to the browser.
+
+The type declaration agreed with it (`interface Session { accessToken?: string }`),
+so TypeScript enforced the leak too. Both came from the same plan text, so the
+plan, the implementation, the types, and the tests were consistent — and all four
+were wrong together.
+
+No mutation finds this. The test fails when the leak is *removed*.
+
+**Fix:** for any assertion about where a credential goes, ask what the test would
+demand if it were inverted, and which direction is actually safe. A test that
+says a secret is *present* somewhere deserves the question "who can read that?"
+
+**Smell:** a test asserting a credential, token, or key appears in a structure
+that crosses a trust boundary — a response body, a client component prop, a log
+line, a serialized cache entry. Consistency between the plan, the types, and the
+tests is not evidence; they often share one author and one mistake.
+
+## Reviewing
+
+- Run the mutation yourself. Do not accept "mutation-verified" on trust —
+  re-derive it. Implementer reports have been wrong about this.
+- Read the test's title, then read its body, and ask whether the body could fail
+  for the reason the title claims.
+- Check the assertion that comes *after* a stronger one. An exact-match `toBe`
+  short-circuits everything below it, so a positional or secondary check placed
+  after it may never execute. This was found inside a fix for pattern 1 — the
+  vacuity reappearing one level down.
+- A test asserting a security property deserves the mutation every time, without
+  exception.
+
+## Writing
+
+State in your report, for each assertion that matters, what you broke and what
+went red. If you cannot describe a mutation that turns a test red, you have not
+written a test.

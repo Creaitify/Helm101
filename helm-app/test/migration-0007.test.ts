@@ -9,8 +9,40 @@ describe('migration 0007 (membership lookup)', () => {
     expect(sql).toMatch(/security definer/i)
   })
 
-  it('pins search_path (mandatory for a security definer function)', () => {
-    expect(sql).toMatch(/set search_path = public/i)
+  // Exact rather than substring, for the same reason as migration-0008.test.ts:
+  // the previous `toMatch(/set search_path = public/i)` passed identically on
+  // the vulnerable `set search_path = public` and the hardened
+  // `set search_path = public, pg_temp`, so it never verified its own name.
+  // Postgres searches pg_temp implicitly FIRST unless pg_temp is named, and
+  // pg_temp is writable by PUBLIC, so an unpinned SECURITY DEFINER function can
+  // be pointed at an attacker's temp `users` table. pg_temp must be present AND
+  // last -- `pg_temp, public` is as exploitable as omitting it entirely.
+  //
+  // This file is SUPERSEDED by 0008 but is still asserted: migrate.mjs replays
+  // every unapplied migration in order, so a fresh database really does create
+  // and grant this function before 0008 replaces it.
+  const searchPathDeclarations = sql.match(/^\s*set\s+search_path\s*=.*$/gim) ?? []
+
+  it('declares a search_path for every security definer function in the file', () => {
+    // Anchored to line start: this file's commentary mentions "SECURITY
+    // DEFINER" in prose several times, and those lines (all `--` comments)
+    // must not be counted as function declarations.
+    const securityDefinerCount = (sql.match(/^\s*security\s+definer\s*$/gim) ?? []).length
+    expect(securityDefinerCount).toBeGreaterThan(0)
+    expect(searchPathDeclarations).toHaveLength(securityDefinerCount)
+  })
+
+  it('pins search_path with pg_temp explicitly last (blocks temp-table shadowing)', () => {
+    for (const declaration of searchPathDeclarations) {
+      expect(declaration.trim()).toBe('set search_path = public, pg_temp')
+
+      const schemas = declaration
+        .replace(/^\s*set\s+search_path\s*=\s*/i, '')
+        .split(',')
+        .map((schema) => schema.trim().toLowerCase())
+      expect(schemas).toContain('pg_temp')
+      expect(schemas[schemas.length - 1]).toBe('pg_temp')
+    }
   })
 
   it('revokes execute from public before granting to helm_app', () => {
