@@ -2,7 +2,9 @@ import type { NextAuthOptions } from 'next-auth'
 import Google from 'next-auth/providers/google'
 import AzureAD from 'next-auth/providers/azure-ad'
 import Auth0 from 'next-auth/providers/auth0'
+import Credentials from 'next-auth/providers/credentials'
 import { env } from '@/lib/server/env'
+import { exchangePasswordForTokens } from '@/lib/server/auth0-credentials'
 
 const providers: NextAuthOptions['providers'] = []
 
@@ -39,6 +41,52 @@ if (env.auth0Issuer && env.auth0ClientId && env.auth0ClientSecret && env.auth0Au
       },
     }),
   )
+
+  // Registered under the SAME four-value guard as the provider above, and for
+  // the same reason: the password grant sends the identical `audience`, and
+  // without it Auth0 returns an opaque token that cannot be verified against
+  // the JWKS. An embedded form that authenticates and then 401s on every API
+  // call is worse than no embedded form.
+  providers.push(
+    Credentials({
+      id: 'credentials',
+      name: 'Email and password',
+      credentials: {
+        email: { label: 'Email', type: 'email' },
+        password: { label: 'Password', type: 'password' },
+      },
+      async authorize(credentials) {
+        const result = await exchangePasswordForTokens(
+          credentials?.email ?? '',
+          credentials?.password ?? '',
+        )
+        // A single `null` for every failure. next-auth turns this into one
+        // `CredentialsSignin` error regardless of cause, so a nonexistent
+        // account and a wrong password are indistinguishable to the caller.
+        // Throwing instead would put a message in the redirect URL.
+        if (!result.ok) return null
+
+        // The access token rides HOME ON THE USER OBJECT, not on `account`.
+        //
+        // This is the difference that matters versus an OAuth provider. For
+        // credentials, next-auth builds `account` itself as exactly
+        // `{ providerAccountId: user.id, type: 'credentials', provider: id }`
+        // (next-auth v4 `core/routes/callback.js`) -- it has no `access_token`
+        // field and never will, because there was no OAuth token response for
+        // it to copy one from. Whatever `authorize` returns IS the `user`
+        // argument to the `jwt` callback, so that is the only channel from here
+        // to the token. Putting the token on `account` would silently drop it
+        // and every FastAPI call would 401.
+        return {
+          id: result.subject,
+          email: result.email,
+          identitySubject: result.subject,
+          accessToken: result.accessToken,
+          accessTokenExpires: result.expiresAt,
+        }
+      },
+    }),
+  )
 }
 
 export const authOptions: NextAuthOptions = {
@@ -47,18 +95,33 @@ export const authOptions: NextAuthOptions = {
   pages: { signIn: '/login' },
   providers,
   callbacks: {
-    jwt({ token, account }) {
+    jwt({ token, account, user }) {
       // `account` is present only on the sign-in call. Every later call must
       // preserve what was stored then, or the access token vanishes after the
       // first request and every FastAPI call 401s.
-      //
-      // `account.access_token` — never `account.id_token`. The ID token
-      // verifies against the same JWKS but carries the wrong `aud`, so FastAPI
-      // rejects it in a way that looks like broken auth.
       if (account) {
-        token.accessToken = account.access_token
-        token.accessTokenExpires = account.expires_at
-        token.identitySubject = account.providerAccountId
+        if (account.type === 'credentials') {
+          // The credentials path. next-auth synthesises `account` for this
+          // provider as `{ providerAccountId, type, provider }` only -- there is
+          // no `access_token` on it, so reading one would store `undefined` and
+          // break every API call while still appearing to sign in successfully.
+          // The token comes from `user`, which is verbatim what `authorize`
+          // returned.
+          const credentialed = user as
+            | { accessToken?: string; accessTokenExpires?: number; identitySubject?: string }
+            | undefined
+          token.accessToken = credentialed?.accessToken
+          token.accessTokenExpires = credentialed?.accessTokenExpires
+          token.identitySubject = credentialed?.identitySubject ?? account.providerAccountId
+        } else {
+          // The OAuth path, unchanged. `account.access_token` — never
+          // `account.id_token`. The ID token verifies against the same JWKS but
+          // carries the wrong `aud`, so FastAPI rejects it in a way that looks
+          // like broken auth.
+          token.accessToken = account.access_token
+          token.accessTokenExpires = account.expires_at
+          token.identitySubject = account.providerAccountId
+        }
       }
       return token
     },

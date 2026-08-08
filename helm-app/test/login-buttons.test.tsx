@@ -72,16 +72,86 @@ describe('LoginButtons', () => {
     expect(screen.queryAllByRole('button')).toHaveLength(0)
   })
 
+  it('renders the embedded form when the credentials provider is registered', () => {
+    render(<LoginButtons providerIds={['credentials']} />)
+
+    expect(screen.getByLabelText(/email/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/password/i)).toBeInTheDocument()
+    expect(screen.queryByText(/no sign-in method/i)).not.toBeInTheDocument()
+  })
+
+  it('offers Google alongside the embedded form', () => {
+    render(<LoginButtons providerIds={['credentials', 'auth0', 'google']} />)
+
+    expect(screen.getByLabelText(/email/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /google/i })).toBeInTheDocument()
+  })
+
+  it('signs in with Google by its own provider id from the combined layout', async () => {
+    render(<LoginButtons providerIds={['credentials', 'google']} />)
+
+    await userEvent.click(screen.getByRole('button', { name: /google/i }))
+
+    expect(signIn).toHaveBeenCalledWith('google', { callbackUrl: '/analytics' })
+  })
+
+  it('still renders an Auth0 redirect button when credentials are not registered', () => {
+    // The Auth0-only environment that caused the original outage. The embedded
+    // form is unavailable there, so the redirect button must still appear.
+    render(<LoginButtons providerIds={['auth0']} />)
+
+    expect(screen.getByRole('button', { name: /auth0/i })).toBeInTheDocument()
+    expect(screen.queryByLabelText(/password/i)).not.toBeInTheDocument()
+  })
+
   it('never renders a card with neither a control nor a message', () => {
     // The invariant behind all of the above, stated once over every input
-    // shape that has occurred in practice.
-    for (const providerIds of [[], ['auth0'], ['google'], ['azure-ad'], ['okta'], ['auth0', 'google']]) {
+    // shape that has occurred in practice -- now including every combination
+    // the credentials provider introduces.
+    for (const providerIds of [
+      [],
+      ['auth0'],
+      ['google'],
+      ['azure-ad'],
+      ['okta'],
+      ['auth0', 'google'],
+      ['credentials'],
+      ['credentials', 'auth0'],
+      ['credentials', 'google'],
+      ['credentials', 'azure-ad'],
+      ['credentials', 'auth0', 'google', 'azure-ad'],
+      ['credentials', 'okta'],
+      ['okta', 'saml'],
+    ]) {
       const { unmount } = render(<LoginButtons providerIds={providerIds} />)
 
       const hasControl = screen.queryAllByRole('button').length > 0
       const hasMessage = screen.queryByText(/no sign-in method/i) !== null
+      // A form with no submit control is as unusable as a blank card, so an
+      // input alone does not satisfy the invariant -- a button must exist.
 
       expect(hasControl || hasMessage, `rendered nothing for [${providerIds.join(', ')}]`).toBe(true)
+      unmount()
+    }
+  })
+
+  it('gives every credentials combination a working submit control, not just any button', () => {
+    // Stronger than the invariant above: when the embedded form renders, it
+    // must be submittable. A form whose only buttons were the mode toggle and
+    // an OAuth redirect would satisfy "has a control" while being unusable.
+    for (const providerIds of [
+      ['credentials'],
+      ['credentials', 'auth0'],
+      ['credentials', 'google'],
+      ['credentials', 'auth0', 'google', 'azure-ad'],
+    ]) {
+      const { unmount } = render(<LoginButtons providerIds={providerIds} />)
+
+      expect(
+        screen.getByRole('button', { name: /^sign in$/i }),
+        `no submit control for [${providerIds.join(', ')}]`,
+      ).toBeInTheDocument()
+      expect(screen.getByLabelText(/email/i)).toBeInTheDocument()
       unmount()
     }
   })
