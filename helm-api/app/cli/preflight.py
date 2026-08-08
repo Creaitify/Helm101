@@ -6,9 +6,15 @@ variable. The trailing-slash asymmetry between `AUTH0_ISSUER` and `OIDC_ISSUER`
 is the worst of them: the token verifies cryptographically and is then rejected
 for wrong issuer, which looks like a signing problem and is not.
 
-This contacts nothing. It reads both environment files and compares them. A
-clean run does not prove login works -- only Auth0 can prove that -- but a
-failing run proves it cannot, and names the line to fix.
+By default this contacts nothing: it reads both environment files and compares
+them. A clean run does not prove login works, but a failing run proves it cannot,
+and names the line to fix.
+
+`--live` additionally asks Auth0 whether an API is registered under
+`AUTH0_AUDIENCE`. That is the one failure the offline checks cannot see, and it
+is the most misleading: with no such API the password grant is rejected for
+"invalid audience", and the user is told "incorrect email or password" -- on the
+signup path, immediately after their account was created successfully.
 
 Nothing here prints a value. Client secrets and tokens are reported as present
 or absent by key name only, because a preflight check that leaks the secret it
@@ -17,7 +23,10 @@ is checking is worse than no check.
 
 from __future__ import annotations
 
+import json
 import sys
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -111,18 +120,92 @@ def check_configuration(app_env: dict[str, str], api_env: dict[str, str]) -> lis
     return findings
 
 
+def check_audience_is_registered(app_env: dict[str, str]) -> list[Finding]:
+    """Ask Auth0 whether the API named by AUTH0_AUDIENCE actually exists.
+
+    This is the one failure the offline checks cannot see, and it is the most
+    confusing one in the whole setup. If the API was never created in the Auth0
+    tenant, the audience names nothing: Auth0 rejects the password grant with
+    "invalid audience specified for password grant exchange", `authorize`
+    correctly returns None, and next-auth reports it as
+    "incorrect email or password". The user then hunts for a typo in a password
+    that was never the problem -- and on the signup path they see it immediately
+    after the account was successfully created, which is doubly misleading.
+
+    Uses the client-credentials grant purely as an existence probe: it names the
+    audience directly, so "Service not enabled within domain: <id>" is a
+    definitive answer about registration. A rejection for any OTHER reason
+    (this application may legitimately not be authorised for machine-to-machine
+    access) is not reported, because that would be a false positive on a
+    correctly configured tenant.
+
+    Network-only. Sends the client secret to the issuer that owns it and to
+    nowhere else, and prints no value from any response.
+    """
+
+    issuer = app_env.get("AUTH0_ISSUER", "").rstrip("/")
+    audience = app_env.get("AUTH0_AUDIENCE", "")
+    client_id = app_env.get("AUTH0_CLIENT_ID", "")
+    client_secret = app_env.get("AUTH0_CLIENT_SECRET", "")
+    if not all((issuer, audience, client_id, client_secret)):
+        return []  # the offline checks already reported whatever is missing
+
+    payload = json.dumps(
+        {
+            "grant_type": "client_credentials",
+            "audience": audience,
+            "client_id": client_id,
+            "client_secret": client_secret,
+        }
+    ).encode()
+    request = urllib.request.Request(
+        f"{issuer}/oauth/token", data=payload, headers={"content-type": "application/json"}
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20):
+            return []  # a token came back: the API exists and is authorised
+    except urllib.error.HTTPError as error:
+        try:
+            body = json.loads(error.read().decode())
+        except Exception:
+            return []
+        description = str(body.get("error_description", "")).lower()
+        # Only this specific shape proves non-registration.
+        if "not enabled within domain" in description or "audience" in description and "invalid" in description:
+            return [
+                Finding(
+                    "AUTH0_AUDIENCE",
+                    "names an API that does not exist in the Auth0 tenant. Create it: "
+                    "Applications -> APIs -> Create API, Identifier exactly this value, RS256",
+                )
+            ]
+        return []
+    except (urllib.error.URLError, TimeoutError):
+        return [Finding("AUTH0_ISSUER", "could not be reached over the network to verify the audience")]
+
+
 def main(argv: list[str] | None = None) -> int:
     """Report configuration findings. Returns 0 when the configuration is usable."""
+
+    live = "--live" in (argv if argv is not None else sys.argv[1:])
 
     root = Path(__file__).resolve().parents[3]
     app_env = parse_env_file(root / "helm-app" / ".env.local")
     api_env = parse_env_file(root / "helm-api" / ".env")
 
     findings = check_configuration(app_env, api_env)
+    if live and not findings:
+        # Only worth asking Auth0 once the offline checks agree; otherwise the
+        # network answer would just restate a local misconfiguration.
+        findings += check_audience_is_registered(app_env)
 
     if not findings:
         print("Preflight passed: both services agree on issuer, audience, and JWKS origin.")
-        print("This does not prove Auth0 accepts the credentials -- only a real sign-in does.")
+        if live:
+            print("The Auth0 tenant confirms an API registered under this audience.")
+        else:
+            print("Offline checks only. Re-run with --live to ask Auth0 whether the API exists;")
+            print("a missing API surfaces at sign-in as 'incorrect email or password'.")
         return 0
 
     print(f"Preflight found {len(findings)} problem(s):\n")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 from pathlib import Path
 
 import pytest
@@ -258,3 +259,103 @@ class _RootedPath:
     @property
     def parents(self) -> dict[int, Path]:
         return {3: self._root}
+
+
+def test_live_check_reports_an_unregistered_audience(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A missing Auth0 API is the failure that reads as "wrong password".
+
+    Auth0 rejects the password grant with "invalid audience specified for
+    password grant exchange", `authorize` returns None, and next-auth renders
+    that as incorrect credentials -- on the signup path, immediately after the
+    account was successfully created.
+    """
+
+    import json
+    import urllib.error
+
+    from app.cli import preflight
+
+    def fake_urlopen(*_args: object, **_kwargs: object) -> object:
+        raise urllib.error.HTTPError(
+            url="https://tenant.test/oauth/token",
+            code=403,
+            msg="Forbidden",
+            hdrs=None,  # type: ignore[arg-type]
+            fp=io.BytesIO(
+                json.dumps(
+                    {"error": "access_denied", "error_description": "Service not enabled within domain: helm-api"}
+                ).encode()
+            ),
+        )
+
+    monkeypatch.setattr(preflight.urllib.request, "urlopen", fake_urlopen)
+    findings = preflight.check_audience_is_registered(dict(VALID_APP))
+    assert [f.key for f in findings] == ["AUTH0_AUDIENCE"]
+    assert "does not exist" in findings[0].problem
+
+
+def test_live_check_stays_quiet_when_the_api_exists(monkeypatch: pytest.MonkeyPatch) -> None:
+    from contextlib import contextmanager
+
+    from app.cli import preflight
+
+    @contextmanager
+    def fake_urlopen(*_args: object, **_kwargs: object):  # type: ignore[no-untyped-def]
+        yield io.BytesIO(b'{"access_token":"x"}')
+
+    monkeypatch.setattr(preflight.urllib.request, "urlopen", fake_urlopen)
+    assert preflight.check_audience_is_registered(dict(VALID_APP)) == []
+
+
+def test_live_check_does_not_false_positive_on_an_unrelated_rejection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An application may legitimately lack machine-to-machine authorisation.
+
+    Reporting that as "the API does not exist" would send someone to recreate an
+    API that is already there.
+    """
+
+    import json
+    import urllib.error
+
+    from app.cli import preflight
+
+    def fake_urlopen(*_args: object, **_kwargs: object) -> object:
+        raise urllib.error.HTTPError(
+            url="https://tenant.test/oauth/token",
+            code=403,
+            msg="Forbidden",
+            hdrs=None,  # type: ignore[arg-type]
+            fp=io.BytesIO(json.dumps({"error": "access_denied", "error_description": "Unauthorized"}).encode()),
+        )
+
+    monkeypatch.setattr(preflight.urllib.request, "urlopen", fake_urlopen)
+    assert preflight.check_audience_is_registered(dict(VALID_APP)) == []
+
+
+def test_live_check_never_prints_a_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The probe sends the client secret; no finding may echo any of it."""
+
+    import json
+    import urllib.error
+
+    from app.cli import preflight
+
+    def fake_urlopen(*_args: object, **_kwargs: object) -> object:
+        raise urllib.error.HTTPError(
+            url="https://tenant.test/oauth/token",
+            code=403,
+            msg="Forbidden",
+            hdrs=None,  # type: ignore[arg-type]
+            fp=io.BytesIO(
+                json.dumps(
+                    {"error": "access_denied", "error_description": "Service not enabled within domain: helm-api"}
+                ).encode()
+            ),
+        )
+
+    monkeypatch.setattr(preflight.urllib.request, "urlopen", fake_urlopen)
+    findings = preflight.check_audience_is_registered(dict(VALID_APP))
+    rendered = " ".join(f"{f.key} {f.problem}" for f in findings)
+    assert findings, "fixture must produce a finding or this proves nothing"
+    assert CLIENT_SECRET not in rendered
+    assert VALID_APP["AUTH0_CLIENT_ID"] not in rendered

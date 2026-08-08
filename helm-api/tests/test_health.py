@@ -65,6 +65,15 @@ def test_production_rejects_wildcard_cors() -> None:
         Settings(helm_env=HelmEnvironment.PRODUCTION, cors_origins=["*"])
 
 
-def test_local_allows_empty_restrictive_cors_default() -> None:
-    settings = Settings(helm_env=HelmEnvironment.LOCAL)
+def test_local_allows_empty_restrictive_cors_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The default is restrictive: no origin is allowed unless one is configured.
+
+    Constructs the absence rather than inheriting it. `Settings()` reads the
+    ambient environment and `.env`, so this passed only on a machine where
+    CORS_ORIGINS happened to be unset -- and failed the moment a real local
+    `.env` set it. The assertion was right; its precondition was accidental.
+    """
+
+    monkeypatch.delenv("CORS_ORIGINS", raising=False)
+    settings = Settings(helm_env=HelmEnvironment.LOCAL, _env_file=None)  # type: ignore[call-arg]
     assert settings.cors_origins == []
