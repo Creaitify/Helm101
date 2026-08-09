@@ -57,6 +57,30 @@ class Settings(BaseSettings):
     oidc_jwks_cache_seconds: int = 300
     allow_dev_unassertion: bool = False
 
+    @field_validator(
+        "database_url",
+        "database_migration_url",
+        "oidc_issuer",
+        "oidc_jwks_url",
+        "oidc_audience",
+        mode="before",
+    )
+    @classmethod
+    def treat_blank_as_absent(cls, value: object) -> object:
+        """Collapse a present-but-empty key to None.
+
+        `cp .env.example .env` is the documented first step of local setup, and
+        it leaves every optional key present with an empty value. Without this,
+        `DATABASE_URL=` clears `create_app`'s `is not None` guard and then fails
+        in `require_database_url`, which rejects blanks -- so a correctly
+        followed runbook produces a service that cannot start and a test suite
+        that dies at collection. Absent and empty must mean the same thing.
+        """
+
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
     @field_validator("log_level")
     @classmethod
     def validate_log_level(cls, value: str) -> str:

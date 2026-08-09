@@ -1,10 +1,52 @@
 # HELM — what is built, what is pending
 
-Last updated: 2026-08-08. Reflects `main` after the Auth0/BFF cutover merge.
+Last updated: 2026-08-09. Reflects `main` after the Auth0/BFF cutover merge, with
+the local toolchain built and every gate re-run rather than quoted.
 
 This is the honest state of the platform: what actually works, what is blocked and
 on whom, and what remains unbuilt. Where something is deferred it says why, so the
 remaining distance is never a surprise.
+
+---
+
+## What is verified running locally
+
+Re-run on 2026-08-09 against a freshly built toolchain, not carried over from a
+previous session:
+
+| Gate | Result |
+|---|---|
+| `helm-app` vitest | 317 passed / 53 files |
+| `helm-api` pytest (unit, Docker up) | 164 passed, 4 skipped |
+| `helm-api` integration runner | 168 passed, 0 skipped |
+| `tsc --noEmit`, ESLint, ruff, mypy | clean |
+| FastAPI boot | `/api/v1/health` 200, `/api/v1/ready` 200 |
+| Next dev boot | `/` 307 → `/login` 200 |
+
+Both services therefore start and serve **without** any Auth0 or database
+credential. What credentials unlock is sign-in and tenant data, not the ability
+to run the platform locally.
+
+The 4 remaining pytest skips are the real-database group, which the integration
+runner covers; a bare `pytest` cannot reach them. The integration count is 168
+rather than the 158 previously recorded: 6 are the new blank-config tests below
+and 4 predate this session.
+
+---
+
+## Remaining local blockers — three inputs, all yours
+
+`preflight` reports 6 problems, which collapse to three things no agent can obtain:
+
+| Input | Fills |
+|---|---|
+| Auth0 tenant domain | `AUTH0_ISSUER` (no trailing slash), `OIDC_ISSUER` (trailing slash **required**), `OIDC_JWKS_URL` |
+| Auth0 client id + secret | `AUTH0_CLIENT_ID`, `AUTH0_CLIENT_SECRET` |
+| Neon connection string | `DATABASE_URL`, as `helm_app` — never `neondb_owner` |
+
+Already filled locally, so they are not blockers: `AUTH_SECRET` and
+`ENCRYPTION_KEY` (generated), `AUTH0_AUDIENCE=helm-api`, and
+`HELM_API_BASE_URL=http://localhost:8000`.
 
 ---
 
@@ -85,8 +127,7 @@ ledger.
 - **Preflight** (`app.cli.preflight`, `--live`) catching the confusing
   misconfigurations before they surface as auth failures.
 
-Gates: helm-app 317 tests / 53 files; helm-api 133 passed (158 with the
-integration runner). ESLint, `tsc --noEmit`, ruff, mypy all clean.
+Gates: see the verified table at the top — re-run rather than quoted.
 
 ---
 
@@ -178,6 +219,19 @@ Fixed in `helm-app/db/migrations/0007` and `0008` (`search_path` pinned
 run**. Any database that predates them still has the vulnerable function. Run
 `npm run db:migrate` against every environment.
 
+### A blank env key used to be worse than a missing one (fixed)
+
+`create_app` guarded the database engine on `database_url is not None`, while
+`require_database_url` also rejects empty strings. `cp .env.example .env` — the
+documented first setup step — produces `DATABASE_URL=`, which cleared the guard
+and then raised. **Following the runbook exactly killed the whole pytest suite at
+collection**, and the same trap applied to `OIDC_ISSUER`.
+
+Fixed in `app/config.py` with a `mode="before"` validator that collapses blank to
+`None`, so absent and present-but-empty mean the same thing.
+`tests/test_config_blank_values.py` covers it, including a test that boots the app
+with the exact shape of a freshly copied template.
+
 ### Smaller items
 
 - `lib/server/tenant-directory.ts` throws an untyped
@@ -188,6 +242,8 @@ run**. Any database that predates them still has the vulnerable function. Run
   report green — see below.
 - `scripts/verify-rls.mjs` has ~90% of the machinery for a live `pg_temp`
   shadowing probe and is the natural home for one.
+- `npm install` reports 7 high-severity advisories in `helm-app`. Not triaged;
+  `npm audit` for details.
 
 ---
 
@@ -206,7 +262,12 @@ cd helm-api && ./.venv/Scripts/python.exe scripts/run_integration_tests.py -q
 
 Starts a disposable container, migrates it, provisions the non-bypass role, and
 sets `HELM_REQUIRE_INTEGRATION_TESTS=1` so a missing prerequisite fails rather
-than skips. 158 passed, 0 skipped.
+than skips. 168 passed, 0 skipped, confirmed on 2026-08-09.
+
+Docker Desktop must actually be **running**, not merely installed. With the CLI
+present but the daemon down, the container-backed tests skip with a
+`DockerException` and a bare `pytest` still reports green — 29 skips that read as
+a pass.
 
 `HELM_TEST_DATABASE_URL` must name a **disposable** database and must **not**
 authenticate as a superuser or `BYPASSRLS` role.
@@ -221,11 +282,30 @@ the wrong reason, every one found in this repository.
 
 ## Local setup
 
-1. `docs/runbooks/auth0-setup.md` — the Auth0 dashboard steps
-2. `helm-app/.env.example`, `helm-api/.env.example` — required variables
-3. `cd helm-api && ./.venv/Scripts/python.exe -m app.cli.preflight --live`
-4. `cd helm-api && ./.venv/Scripts/python.exe -m uvicorn app.main:app --port 8000`
-5. `cd helm-app && npm run dev`
+Steps 1 and 2 create the toolchain. Neither `helm-api/.venv` nor a complete
+`helm-app/node_modules` is in the repo, and skipping either produces a failure
+that looks like broken code rather than missing setup: a stale `node_modules`
+fails 21 of 53 vitest files on `Failed to resolve import "next-auth"`.
+
+```bash
+cd helm-api && py -3 -m venv .venv \
+  && ./.venv/Scripts/python.exe -m pip install -r requirements.txt -r requirements-dev.txt
+cd helm-app && npm install
+```
+
+3. `docs/runbooks/auth0-setup.md` — the Auth0 dashboard steps
+4. `helm-app/.env.example`, `helm-api/.env.example` — required variables.
+   Copy them to `helm-api/.env` and `helm-app/.env.local`. `AUTH_SECRET` and
+   `ENCRYPTION_KEY` are free-form: generate them locally with
+   `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`.
+   Leaving `AUTH_SECRET` empty surfaces as `[next-auth][error][NO_SECRET]` while
+   the login page still returns 200.
+5. `cd helm-api && ./.venv/Scripts/python.exe -m app.cli.preflight --live`
+6. `cd helm-api && ./.venv/Scripts/python.exe -m uvicorn app.main:app --port 8000`
+7. `cd helm-app && npm run dev`
+
+Docker Desktop must be running before the integration runner, or its database
+tests skip and the run still reports green — see "Running the tests properly".
 
 **The trailing-slash asymmetry is deliberate.** `AUTH0_ISSUER` takes **no**
 trailing slash (NextAuth appends discovery paths to it); `OIDC_ISSUER`
