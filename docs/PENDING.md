@@ -1,140 +1,133 @@
 # HELM — what is built, what is pending
 
-Last updated: 2026-08-09. Reflects `main` after the Auth0/BFF cutover merge, with
-the local toolchain built and every gate re-run rather than quoted.
+Last updated: 2026-08-11. Reflects the consolidation cleanup (branch `anzar`):
+Phase A deleted, monorepo reshape (`api/`, `web/`, `workers/`), demo-mode data
+seam. Governed by the technical blueprint (HELM_Technical_Blueprint.pdf) and
+`HELM_ARCHITECTURE.md`: **consolidate and extend, not rewrite.**
 
-This is the honest state of the platform: what actually works, what is blocked and
-on whom, and what remains unbuilt. Where something is deferred it says why, so the
-remaining distance is never a surprise.
+This is the honest state of the platform: what actually works, what is blocked
+and on whom, and what remains unbuilt. Where something is deferred it says why.
+
+---
+
+## What the consolidation changed (2026-08-11)
+
+The blueprint's drop-list, executed:
+
+- **Phase A is gone.** `lib/repositories/`, `lib/server/{tenant-session,db,
+  tenant-context,audit,platform-read}.ts`, `db/migrations/` (SQL 0001–0008),
+  the `db:*` scripts, and the email-keyed identity path — deleted (~4,000 lines
+  incl. tests). One identity model remains: `(issuer, subject)` in FastAPI.
+  One database remains: the Alembic-owned schema. One scope vocabulary remains:
+  the API's.
+- **The prototype gateway stub is gone** (`lib/gateway/`, `usage.ts`). The real
+  gateway is sub-project 3, inside FastAPI.
+- **The fixture-fallback ladder is gone.** `lib/data` serves fixtures
+  explicitly; demo mode is a first-class flag (`HELM_DEMO_MODE`, default: demo
+  exactly when `HELM_API_BASE_URL` is unset). Production code never silently
+  falls back to fixtures again.
+- **The app shell cut over to the API.** `app/(app)/layout.tsx` resolves the
+  tenant through `GET /api/v1/tenants` (via `lib/server/shell-data.ts`), with
+  the `helm_active_tenant` cookie as a non-authoritative `X-HELM-Active-Tenant`
+  hint and stale-hint retry. The tenant switcher is now "pick among your own
+  tenants" — platform-admin impersonation went with Phase A.
+- **Monorepo reshape**: `helm-api → api/`, `helm-app → web/`, plus a `workers/`
+  scaffold documenting what lands there (queue consumers, generation jobs,
+  LangGraph runtime).
+- **Docs consolidated.** Completed superpowers plans/specs and mockups v1/v3
+  deleted (git history on `main` is the archive); `followups.md` folded into
+  the backlog below; `helm-mockup-v4.html` stays as the pixel source of truth.
+
+What deliberately did **not** change: the auth spine (Auth0 + NextAuth BFF +
+FastAPI verification chain), every UI surface's rendering, `app/globals.css`,
+and all of `api/` except one empty package and path references.
 
 ---
 
 ## What is verified running locally
 
-Re-run on 2026-08-09 against a freshly built toolchain, not carried over from a
-previous session:
+Re-run on 2026-08-11 after the cleanup:
 
 | Gate | Result |
 |---|---|
-| `helm-app` vitest | 317 passed / 53 files |
-| `helm-api` pytest (unit, Docker up) | 164 passed, 4 skipped |
-| `helm-api` integration runner | 168 passed, 0 skipped |
-| `tsc --noEmit`, ESLint, ruff, mypy | clean |
-| FastAPI boot | `/api/v1/health` 200, `/api/v1/ready` 200 |
-| Next dev boot | `/` 307 → `/login` 200 |
+| `web` vitest | 207 passed / 43 files |
+| `web` `tsc --noEmit`, ESLint, `next build` | clean |
+| `api` pytest (no Docker) | 139 passed, 29 skipped (all Docker/DB-gated) |
+| `api` integration runner | not re-run this session (Docker unavailable); last full run 2026-08-09: 168 passed, 0 skipped |
 
-Both services therefore start and serve **without** any Auth0 or database
-credential. What credentials unlock is sign-in and tenant data, not the ability
-to run the platform locally.
+The vitest delta from the previous record (317/53) is the deleted Phase A test
+files plus the new seam tests (`shell-data`, `data-demo`, `app-layout`, and
+rewritten `tenant-directory`/`tenant-switch-route`/`approvals-action`/
+`role-mapping`).
 
-The 4 remaining pytest skips are the real-database group, which the integration
-runner covers; a bare `pytest` cannot reach them. The integration count is 168
-rather than the 158 previously recorded: 6 are the new blank-config tests below
-and 4 predate this session.
+Both services start and serve **without** any Auth0 or database credential —
+`web` renders every surface in demo mode. Credentials unlock sign-in and real
+tenant data, not the ability to run the platform.
 
 ---
 
 ## Remaining local blockers — three inputs, all yours
 
-`preflight` reports 6 problems, which collapse to three things no agent can obtain:
-
 | Input | Fills |
 |---|---|
 | Auth0 tenant domain | `AUTH0_ISSUER` (no trailing slash), `OIDC_ISSUER` (trailing slash **required**), `OIDC_JWKS_URL` |
 | Auth0 client id + secret | `AUTH0_CLIENT_ID`, `AUTH0_CLIENT_SECRET` |
-| Neon connection string | `DATABASE_URL`, as `helm_app` — never `neondb_owner` |
-
-Already filled locally, so they are not blockers: `AUTH_SECRET` and
-`ENCRYPTION_KEY` (generated), `AUTH0_AUDIENCE=helm-api`, and
-`HELM_API_BASE_URL=http://localhost:8000`.
+| Neon connection string | `DATABASE_URL`, as `helm_app` — never a `BYPASSRLS` role |
 
 ---
 
-## The one thing blocking local sign-in
+## The one thing blocking live sign-in
 
 **Create the `helm-api` API in the Auth0 tenant `dev-0z3nrg8oz43x8zsc`.**
 
 Auth0 dashboard → **Applications → APIs → Create API** (the APIs section, not
-Applications → Applications — those are different object types and only an API
-defines an audience):
+Applications → Applications):
 
 | Field | Value |
 |---|---|
 | Name | `HELM API` |
-| Identifier | `helm-api` |
+| Identifier | `helm-api` (the literal string — not a URL, cannot be changed later) |
 | Signing algorithm | RS256 |
 
-The Identifier must be the literal string `helm-api`. Auth0's UI suggests a URL
-and its help text encourages one; ignore that. The value is compared verbatim
-against `AUTH0_AUDIENCE` and `OIDC_AUDIENCE`. It cannot be changed after
-creation — a wrong identifier means deleting the API and starting over.
-
-RS256 is not optional: FastAPI refuses symmetric algorithms at startup, because
-allowing HS256 alongside an RSA JWKS is the classic algorithm-confusion attack.
-
-Verify with:
+Without it, Auth0 rejects the password grant for "invalid audience" and the
+user sees *"incorrect email or password"* for a password that was never
+checked. Verify with:
 
 ```bash
-cd helm-api && ./.venv/Scripts/python.exe -m app.cli.preflight --live
+cd api && ./.venv/Scripts/python.exe -m app.cli.preflight --live
 ```
 
-**Why this is worth its own section:** without the API, Auth0 rejects the password
-grant for "invalid audience", `authorize()` correctly returns `None`, and the user
-is shown *"incorrect email or password"* — on the signup path, immediately after
-their account was created successfully. The message points at a password that was
-never checked. `--live` exists specifically to catch this before a login attempt.
-
-Verified working already: the tenant is reachable, the password grant is enabled,
-signup creates real accounts (HTTP 200), and the database connection is live.
+Already verified working: tenant reachable, password grant enabled, signup
+creates real accounts.
 
 ---
 
-## Sub-project status
+## Build plan — phases and gates (from the blueprint)
 
-| # | Sub-project | Status |
+Each phase ends with a CI-enforceable gate. Hardening items fold into the
+phase where they become load-bearing.
+
+| Phase | Deliverable | Gate |
 |---|---|---|
-| 1 | Identity spine (FastAPI) | **Done**, merged |
-| 2 | Auth0 + BFF cutover | **Code complete**, merged. Live sign-in blocked above |
-| 3 | Model gateway | **Not started** — next |
-| 4 | Studio generation | **Not started** — depends on 3 |
+| **0. Foundation** | Consolidated repo (`api/ web/ workers/ docs/`), Phase A deleted, demo seam | ✅ this cleanup — all suites green |
+| **1. Close the auth gap** | BFF workload assertion verified by FastAPI; rate limiting | a direct-to-API call without the assertion fails in staging |
+| **2. Domain cutover** | campaigns / approvals / directory / integrations as real FastAPI endpoints; `lib/data` getters swap fixture → API at their `TODO(phase-2)` markers | UI reads only through the API client; demo mode still fully renders |
+| **3. Model gateway** | `gateway/{contracts,adapters/anthropic,ledger,service,keys}.py` in FastAPI; Langfuse tracing; routing table | the N-vs-cap concurrency test passes; 402 surfaces cleanly |
+| **4. Studio generation** | brief → Claude variants → compliance verdict → human gate → persisted, audited, billed | the slice definition of done below; eval gate green |
+| **5. Async spine + creative** | Postgres queue (SKIP LOCKED), outbox, workers, DLQ; R2 signed URLs; image/video as async jobs | job survives worker restart; DLQ re-drive works |
+| **6. Agents + MCP** | LangGraph runtime (Postgres checkpointer); Analyst agent first (read-only); MCP read-first | proposal appears in inbox and resumes on decision; kill switch freezes autonomy |
+| **7. Scale & sovereignty** | local inference adapter (vLLM), hosted fine-tunes, Redis graduation — **trigger-driven only** | same eval suite passes on the new route; rollback demonstrated |
 
-### Definition of done for the slice
+### Definition of done for the current slice
 
 A real person signs in through Auth0, lands in their tenant, writes a brief in
 Studio, and sees copy variants generated by Claude — persisted,
-guardrail-evaluated, tenant-isolated, audited, and billed against a real budget
+compliance-checked, tenant-isolated, audited, and billed against a real budget
 ledger.
 
 ---
 
-## What works today
-
-- **Identity and tenancy.** OIDC JWT verification (provider-agnostic, JWKS-cached
-  with forced refetch on `kid` miss), `users` + `tenant_memberships` keyed on
-  `(identity_issuer, identity_subject)` — never email — canonical roles and
-  scopes, RLS tenant context, append-only audit.
-- **Row-level security**, FORCE-enabled on every tenant-owned table, proven under
-  a genuinely non-`BYPASSRLS` role. Two `SECURITY DEFINER` keyhole functions with
-  `search_path` pinned `public, pg_temp`.
-- **The BFF cutover.** `helm-app` sources the tenant list from FastAPI rather than
-  querying Neon directly. RFC 9457 problem-details translation that never echoes
-  an upstream body, and cannot distinguish "tenant does not exist" from "caller
-  has no membership".
-- **Embedded login** — email/password with signup, plus Google when configured.
-  The access token reaches FastAPI and never the browser.
-- **Deliberate provisioning** via `app.cli.provision`. No implicit user creation
-  from a token.
-- **Preflight** (`app.cli.preflight`, `--live`) catching the confusing
-  misconfigurations before they surface as auth failures.
-
-Gates: see the verified table at the top — re-run rather than quoted.
-
----
-
-## Next: sub-project 3, the model gateway
-
-Replaces `helm-app/lib/gateway/gateway.ts` — environment-variable routing with no
-adapters, no ledger, no durable usage record — with a real gateway inside FastAPI.
+## Next: the model gateway (sub-project 3 / Phase 3)
 
 | Module | Purpose |
 |---|---|
@@ -144,189 +137,147 @@ adapters, no ledger, no durable usage record — with a real gateway inside Fast
 | `gateway/service.py` | Composes: resolve policy → reserve → call → record |
 | `gateway/keys.py` | Single accessor for provider credentials |
 
-**The budget ledger is the hard part.** Recording spend after a successful call is
-wrong under concurrency: unbounded simultaneous requests all pass the cap check
-before any of them records. The design is reserve-before, reconcile-after, with
-the cap check and reservation in one transaction. Deliberately pessimistic —
-it refuses spend you could afford rather than spending money you do not have.
+**The budget ledger is the hard part.** Reserve-before, reconcile-after, with
+the cap check and reservation in one transaction. The test that matters: *N
+simultaneous requests against a cap permitting fewer than N must yield exactly
+the permitted number of successes.* Exhaustion returns `budget_exceeded` /
+HTTP 402. **Provider fallback is deliberately absent** until the
+data-residency decision exists. No Anthropic key is needed to build it —
+adapters run against recorded fixtures.
 
-The test that matters: *N simultaneous requests against a cap permitting fewer
-than N must result in exactly the permitted number succeeding.* This is the test
-the naive design fails.
-
-Exceeding a cap returns `budget_exceeded` / HTTP 402, because a marketer must be
-told they are out of budget rather than shown a generic failure.
-
-**Provider fallback is deliberately absent.** Silent cross-provider retry is
-precisely what a data-residency decision must govern; building it before that
-decision exists creates an undocumented data path.
-
-No Anthropic API key is needed to build this: adapters run against recorded
-fixtures, and one opt-in smoke test calls the real provider when a key is present
-and skips cleanly otherwise.
-
----
-
-## Then: sub-project 4, Studio generation
-
-Campaign copy generation end to end — request path, data model, the guardrail
-boundary and its honest limit, Studio UI changes. Depends entirely on 3.
+Framework decisions (blueprint §5): Studio generation and workspace chat use
+the **direct Anthropic SDK** (no framework); RAG is owned pgvector code;
+**LangGraph without LangChain** for agents (Phase 6); Langfuse self-hosted for
+LLM observability.
 
 ---
 
 ## Deferred, with reasons
 
-Not overlooked. Each is deliberate and recorded in the spec.
-
 | Item | Why deferred |
 |---|---|
-| **Async spine** (queue, outbox, workers, DLQ) | Text generation is served synchronously with a timeout. Open decision #3 |
-| **Image and video generation** | Needs the async spine, R2 object storage, long-running job handling. #10 |
-| **LangGraph agent runtime** | #6 |
-| **Embedded LLM workspace** | Needs streaming through FastAPI plus conversation persistence |
-| **Invitation lifecycle** | #8. Sub-project 2 provides deliberate seeding only |
-| **Vault/KMS** | #4. Provider keys stay in environment variables behind a single accessor |
-| **Refresh-token rotation** | Storing a refresh token means storing a credential with no expiry, before Vault/KMS exists. Auth0 access tokens last 24h; a stale one surfaces as a clean 401 |
-| **Migrating campaigns and approvals off Phase A** | They keep their existing path until their FastAPI endpoints exist |
-| **The eleven other UI surfaces** | Still render mock data |
+| **Domain endpoints** (campaigns, approvals, directory, integrations) | Phase 2. Until then every surface serves fixtures; approvals' approve/reject is a validated no-op acknowledgment |
+| **Async spine** (queue, outbox, workers, DLQ) | Phase 5; open decision #3 |
+| **Image and video generation** | Needs the async spine + R2. #10 |
+| **LangGraph agent runtime** | Phase 6. #6 |
+| **Embedded LLM workspace** | Needs streaming through FastAPI + conversation persistence |
+| **Invitation lifecycle** | #8. `app.cli.provision` is the only entry path |
+| **Vault/KMS** | #4. Provider keys stay in env vars behind a single accessor |
+| **Refresh-token rotation** | Needs Vault/KMS first. Auth0 access tokens last 24h; a stale one surfaces as a clean 401 |
+| **BFF workload assertion** | Phase 1. Today the BFF sends only the bearer token |
+| **Cross-tenant platform-admin reads** | Went with Phase A's `platform-read.ts`; returns as real platform-scoped FastAPI endpoints when needed |
 
 ---
 
 ## Known issues and technical debt
 
-### Two identity models coexist
+### Resolved by the consolidation (2026-08-11)
 
-Phase A's `lib/server/tenant-session.ts` keys on **email**, which
-`auth-contract.md` forbids. The FastAPI path keys correctly on
-`(issuer, subject)`. Phase A is unchanged because campaigns and approvals depend
-on it; migrating belongs with their own cutover.
+- ~~Two identity models~~ — Phase A's email-keyed path is deleted.
+- ~~Two databases / two migration runners~~ — Alembic is the only runner.
+- ~~Two scope vocabularies~~ — only the API's remains.
+- ~~`tenant-directory.ts` untyped auth error~~ — now a typed
+  `UnauthenticatedError`.
+- ~~Phase A `helm_lookup_membership` pg_temp exposure~~ — the vulnerable
+  migrations no longer exist in the repo. **Operational leftover:** any still-running
+  prototype `neondb` instance predating migrations 0007/0008 carries the
+  vulnerable function — decommission it (nothing reads it anymore).
 
-Concretely: `helm-app` reads Phase A's `neondb` while FastAPI uses a separate
-`helm_stage1` database. `users` in each has a different shape — Phase A's user
-belongs to one tenant; Stage 1's has a separate memberships table. Reconciling
-them is open decision #8.
+### Open
 
-### Two scope vocabularies
+- **`GET /api/v1/tenants` discovery chicken-and-egg.** A multi-membership
+  caller with no `X-HELM-Active-Tenant` hint gets `tenant_context_required` —
+  you cannot list tenants to pick one without naming one. The layout routes
+  this to `/no-access` with a `TODO(phase-2)`; the API should exempt the
+  discovery endpoint from requiring context.
+- **The tenants endpoint returns only the active tenant**, so the switcher can
+  never show multiple tenants in live mode until the endpoint returns all of
+  the caller's memberships (Phase 1–2 change).
+- **`Tenant.region`/`env` in the shell are placeholders** in live mode
+  (`'cloud'` / `HELM_ENV`) — the API doesn't model them yet.
+- **No CI configuration.** When added, it must set
+  `HELM_REQUIRE_INTEGRATION_TESTS=1` or the DB tests skip silently and report
+  green. The eval regression gate (Phase 4) belongs in the same pipeline.
+- **`npm audit` advisories** in `web` — re-check after the dependency pruning
+  (`@neondatabase/serverless`, `tsx`, `playwright` removed); triage what
+  remains.
+- **`api/.venv` predates the folder rename** — recreate it (`py -3.12 -m venv
+  .venv`) if pip misbehaves; pytest runs fine.
 
-Phase A uses `analytics.read` / `campaigns.write`. Stage 1 uses `campaign:read` /
-`approval:decide`. Separate systems; must not be conflated. The FastAPI
-vocabulary is the one that survives.
+### UI backlog (from the retired followups.md — all pure frontend, unblocked)
 
-### Phase A's `helm_lookup_membership`
-
-Fixed in `helm-app/db/migrations/0007` and `0008` (`search_path` pinned
-`public, pg_temp`), but **the fix is only applied where those migrations have
-run**. Any database that predates them still has the vulnerable function. Run
-`npm run db:migrate` against every environment.
-
-### A blank env key used to be worse than a missing one (fixed)
-
-`create_app` guarded the database engine on `database_url is not None`, while
-`require_database_url` also rejects empty strings. `cp .env.example .env` — the
-documented first setup step — produces `DATABASE_URL=`, which cleared the guard
-and then raised. **Following the runbook exactly killed the whole pytest suite at
-collection**, and the same trap applied to `OIDC_ISSUER`.
-
-Fixed in `app/config.py` with a `mode="before"` validator that collapses blank to
-`None`, so absent and present-but-empty mean the same thing.
-`tests/test_config_blank_values.py` covers it, including a test that boots the app
-with the exact shape of a freshly copied template.
-
-### Smaller items
-
-- `lib/server/tenant-directory.ts` throws an untyped
-  `Error('The caller is not authenticated')`, so callers can only distinguish it
-  by string-matching. Left as a seam.
-- No CI configuration exists. When one is added it must set
-  `HELM_REQUIRE_INTEGRATION_TESTS=1`, or the database tests skip silently and
-  report green — see below.
-- `scripts/verify-rls.mjs` has ~90% of the machinery for a live `pg_temp`
-  shadowing probe and is the natural home for one.
-- `npm install` reports 7 high-severity advisories in `helm-app`. Not triaged;
-  `npm audit` for details.
+- Approvals: real Edit affordance (open payload in a SlideOver before approve).
+- Studio: acknowledge-to-ship for SEBI-flagged variants.
+- Workspace: token-by-token reply reveal; file-attach chip.
+- Campaigns: sortable columns; wire the drawer chart to `detail.series`.
+- Analytics: move inline presentational datasets (heatmap seed, gauge targets,
+  leaderboard rows) into `lib/data`.
+- Mobile: sidebar drawer under ~820px; `DataTable` `any` types.
 
 ---
 
 ## Running the tests properly
 
-**`pytest` alone does not run the database tests.** Two independent gates skip
-them silently and both report green: Docker being unavailable, and
-`HELM_TEST_DATABASE_URL` being unset. Between them they cover RLS, the
-`SECURITY DEFINER` keyholes, provisioning under a non-bypass role, and the tenant
-name coming from the database rather than being fabricated from the slug. Four of
-those had **never run** before this was fixed.
-
 ```bash
-cd helm-api && ./.venv/Scripts/python.exe scripts/run_integration_tests.py -q
+cd web && npm test && npx tsc --noEmit && npm run lint
+cd api && ./.venv/Scripts/python.exe -m pytest -q
 ```
 
-Starts a disposable container, migrates it, provisions the non-bypass role, and
-sets `HELM_REQUIRE_INTEGRATION_TESTS=1` so a missing prerequisite fails rather
-than skips. 168 passed, 0 skipped, confirmed on 2026-08-09.
+**`pytest` alone does not run the database tests** — Docker being unavailable
+and `HELM_TEST_DATABASE_URL` being unset both skip them silently. Run the full
+suite with nothing skipped:
 
-Docker Desktop must actually be **running**, not merely installed. With the CLI
-present but the daemon down, the container-backed tests skip with a
-`DockerException` and a bare `pytest` still reports green — 29 skips that read as
-a pass.
+```bash
+cd api && ./.venv/Scripts/python.exe scripts/run_integration_tests.py -q
+```
 
-`HELM_TEST_DATABASE_URL` must name a **disposable** database and must **not**
-authenticate as a superuser or `BYPASSRLS` role.
-`tests/test_rls_integration.py` refuses to run against one — that refusal is the
-guard, not an obstacle. RLS assertions under a bypassing role prove nothing, and
-that is how this project's RLS chicken-and-egg bug stayed hidden twice.
+Docker Desktop must actually be **running**. `HELM_TEST_DATABASE_URL` must
+name a disposable database and must **not** be a superuser/`BYPASSRLS` role —
+`tests/test_rls_integration.py` refuses otherwise, deliberately.
 
-See also `docs/conventions/test-vacuity.md` — ten patterns of tests that pass for
+See `docs/conventions/test-vacuity.md` — ten patterns of tests that pass for
 the wrong reason, every one found in this repository.
 
 ---
 
 ## Local setup
 
-Steps 1 and 2 create the toolchain. Neither `helm-api/.venv` nor a complete
-`helm-app/node_modules` is in the repo, and skipping either produces a failure
-that looks like broken code rather than missing setup: a stale `node_modules`
-fails 21 of 53 vitest files on `Failed to resolve import "next-auth"`.
-
 ```bash
-cd helm-api && py -3 -m venv .venv \
+cd api && py -3.12 -m venv .venv \
   && ./.venv/Scripts/python.exe -m pip install -r requirements.txt -r requirements-dev.txt
-cd helm-app && npm install
+cd web && npm install
 ```
 
-3. `docs/runbooks/auth0-setup.md` — the Auth0 dashboard steps
-4. `helm-app/.env.example`, `helm-api/.env.example` — required variables.
-   Copy them to `helm-api/.env` and `helm-app/.env.local`. `AUTH_SECRET` and
-   `ENCRYPTION_KEY` are free-form: generate them locally with
-   `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`.
-   Leaving `AUTH_SECRET` empty surfaces as `[next-auth][error][NO_SECRET]` while
-   the login page still returns 200.
-5. `cd helm-api && ./.venv/Scripts/python.exe -m app.cli.preflight --live`
-6. `cd helm-api && ./.venv/Scripts/python.exe -m uvicorn app.main:app --port 8000`
-7. `cd helm-app && npm run dev`
+**Demo mode (zero setup):** `cd web && npm run dev` with an empty `.env.local`
+renders every surface from fixtures.
 
-Docker Desktop must be running before the integration runner, or its database
-tests skip and the run still reports green — see "Running the tests properly".
+**Live mode:**
+
+1. `docs/runbooks/auth0-setup.md` — the Auth0 dashboard steps.
+2. Copy `web/.env.example → web/.env.local` and `api/.env.example → api/.env`.
+   Generate `AUTH_SECRET`/`ENCRYPTION_KEY` with
+   `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`.
+3. `cd api && ./.venv/Scripts/python.exe -m app.cli.preflight --live`
+4. `cd api && ./.venv/Scripts/python.exe -m uvicorn app.main:app --port 8000`
+5. `cd web && npm run dev`
 
 **The trailing-slash asymmetry is deliberate.** `AUTH0_ISSUER` takes **no**
-trailing slash (NextAuth appends discovery paths to it); `OIDC_ISSUER`
-**requires** one (Auth0's `iss` claim carries one and the verifier compares it
-verbatim). Getting this wrong produces a token that verifies cryptographically
-and is then rejected for wrong issuer — which looks like a signing problem.
+trailing slash; `OIDC_ISSUER` **requires** one. Getting it wrong produces a
+token that verifies cryptographically and is then rejected for wrong issuer.
 
-`DATABASE_URL` must authenticate as `helm_app`, never `neondb_owner`, whose
-`rolbypassrls` silently disables tenant isolation. Both URLs need the
-`postgresql+asyncpg://` scheme, and **no** `?sslmode=`/`channel_binding=` query
-string — those are libpq options that asyncpg rejects.
+`DATABASE_URL` must authenticate as `helm_app` (no `BYPASSRLS`), scheme
+`postgresql+asyncpg://`, and **no** `?sslmode=`/`channel_binding=` query
+string (libpq options that asyncpg rejects).
 
 ---
 
 ## After sign-in works
 
-1. Get your Auth0 `sub` from User Management → Users → your user → `user_id`
+1. Get your Auth0 `sub` from User Management → Users → your user → `user_id`.
 2. Provision yourself:
 
 ```bash
-cd helm-api && ./.venv/Scripts/python.exe -m app.cli.provision \
+cd api && ./.venv/Scripts/python.exe -m app.cli.provision \
   --issuer "https://dev-0z3nrg8oz43x8zsc.eu.auth0.com/" \
   --subject "auth0|YOUR-SUBJECT" \
   --email "you@example.com" \
@@ -336,16 +287,25 @@ cd helm-api && ./.venv/Scripts/python.exe -m app.cli.provision \
 
 `--issuer` must match `OIDC_ISSUER` exactly, trailing slash included.
 
-3. Run the five-point verification in `docs/runbooks/auth0-setup.md`. Point 5 is
-   the one worth doing deliberately: **stop FastAPI and reload.** You must see an
-   error state, not an empty tenant list. Rendering an outage as zero tenants is
-   indistinguishable from having access revoked, and would send a user to support
-   for what is actually a 503.
+3. Set `HELM_DEMO_MODE=false` (or just set `HELM_API_BASE_URL`) and verify the
+   shell resolves your real tenant. Then **stop FastAPI and reload**: you must
+   see an error state, not an empty tenant list — an outage must never look
+   like revoked access.
 
 ---
 
-## Open decisions
+## Decision register
 
-Items 1 and 5 are closed (hosted OIDC issuer, Auth0). Items **2, 3, 4, 6, 7, 8, 9
-and 10** remain open — see `docs/open-decisions.md`. None blocks the current work;
-each is recorded where it constrains a future decision.
+Closed: **#1/#5** (hosted OIDC issuer: Auth0) · **repo shape** (monorepo
+`api/ web/ workers/ docs/` — executed 2026-08-11).
+
+Recommended by the blueprint (§12), awaiting a one-line sign-off each:
+hosting (Vercel + Railway/Fly.io) · queue (Postgres SKIP LOCKED, no Redis at
+launch) · agent language (Python — reverses the original TS-first note) ·
+AI budget rate card · observability stack (Langfuse self-hosted + Grafana +
+Sentry).
+
+Still open: **2, 3, 4, 6, 7, 8, 9, 10** — see `docs/open-decisions.md`. Real
+PII ingestion and non-proposed autonomous actions stay off until residency,
+autonomy policy, and R2 region are signed off — a business gate, not an
+engineering one.

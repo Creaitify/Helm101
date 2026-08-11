@@ -1,7 +1,9 @@
-# Auth0 setup — the manual step that unblocks Tasks 2 and 8
+# Auth0 setup — the manual step that unblocks live sign-in
 
-**Status:** awaiting the dashboard step below. Everything else in the Auth0/BFF cutover
-is built and reviewed on branch `feat/auth0-bff-cutover`.
+**Status:** still awaiting the dashboard step below (the Auth0/BFF cutover itself is
+merged on `main`). Until the API object exists, the password grant fails with
+"invalid audience" and the login form shows "incorrect email or password".
+Verify with `python -m app.cli.preflight --live` from `api/`.
 
 This is the one part of the cutover no agent can do: creating an Auth0 API and
 application produces a client secret that must be generated interactively.
@@ -17,7 +19,7 @@ Auth0 dashboard → **Applications → APIs → Create API**
 | Signing algorithm | **RS256** |
 
 The identifier must be exactly `helm-api`. It becomes both `AUTH0_AUDIENCE` in
-`helm-app` and `OIDC_AUDIENCE` in `helm-api`, and all three must match.
+`web/` and `OIDC_AUDIENCE` in `api/`, and all three must match.
 
 RS256 is not optional. Stage 1's config validator refuses symmetric algorithms at
 startup, deliberately: allowing `HS256` alongside an RSA JWKS is the classic
@@ -42,7 +44,7 @@ Then in its Settings:
 
 Record the domain, client id, and client secret.
 
-## 3. Fill in `helm-app/.env.local`
+## 3. Fill in `web/.env.local`
 
 ```
 AUTH0_ISSUER=https://YOUR-TENANT.REGION.auth0.com
@@ -53,20 +55,20 @@ HELM_API_BASE_URL=http://localhost:8000
 ```
 
 `.env.local` is git-ignored and already holds your real database values. Never commit it.
-`helm-app/.env.example` carries these same keys with empty values and inline notes.
+`web/.env.example` carries these same keys with empty values and inline notes.
 
 All four `AUTH0_*` values are required together. If `AUTH0_AUDIENCE` is missing the
 provider deliberately refuses to register, rather than requesting `audience: undefined`
 and receiving an opaque token that no JWKS can verify. A missing-config failure at
 startup is worth far more than a 401 at first login that reads as broken auth.
 
-## 4. Fill in `helm-api/.env`
+## 4. Fill in `api/.env`
 
 This file does not exist yet. Copy the template rather than writing one, so you
 inherit the database and CORS entries too:
 
 ```bash
-cd helm-api && cp .env.example .env
+cd api && cp .env.example .env
 ```
 
 Then set the OIDC block (`OIDC_AUDIENCE` and `OIDC_ALLOWED_ALGORITHMS` already
@@ -83,7 +85,7 @@ OIDC_JWKS_URL=https://YOUR-TENANT.REGION.auth0.com/.well-known/jwks.json
 ## 5. Check the configuration before trying to log in
 
 ```bash
-cd helm-api && ./.venv/Scripts/python.exe -m app.cli.preflight
+cd api && ./.venv/Scripts/python.exe -m app.cli.preflight
 ```
 
 This validates what it can without contacting Auth0 — that all four `AUTH0_*`
@@ -99,8 +101,8 @@ will not, and tells you exactly which line to fix.
 This is the detail most people get wrong, and the failure it produces is confusing —
 a token that verifies cryptographically and is then rejected for wrong issuer.
 
-- **`AUTH0_ISSUER` (helm-app): NO trailing slash.** NextAuth appends discovery paths to it.
-- **`OIDC_ISSUER` (helm-api): trailing slash REQUIRED.** Auth0's `iss` claim carries one,
+- **`AUTH0_ISSUER` (web): NO trailing slash.** NextAuth appends discovery paths to it.
+- **`OIDC_ISSUER` (api): trailing slash REQUIRED.** Auth0's `iss` claim carries one,
   and Stage 1's verifier compares the issuer verbatim.
 
 ## What happens next
@@ -128,7 +130,7 @@ never auto-creates users from a token, because implicit provisioning is how tena
 acquire members nobody decided to add.
 
 Get your Auth0 `sub` from **User Management → Users → your user → `user_id`**, then from
-`helm-api/`:
+`api/`:
 
 ```bash
 ./.venv/Scripts/python.exe -m app.cli.provision \
@@ -162,10 +164,6 @@ actually a 503.
   must sign in again. Rotation is deferred until Vault/KMS exists
   (`open-decisions.md` #4), because storing a refresh token means storing a credential
   that does not expire.
-- **Two identity paths coexist.** Phase A's `lib/server/tenant-session.ts` still keys on
-  email, which `auth-contract.md` forbids. It is not changed here because campaigns and
-  approvals depend on it; migrating it belongs with their own cutover. The new FastAPI
-  path keys correctly on `(issuer, subject)`.
-- **Two scope vocabularies.** Phase A uses `analytics.read` / `campaigns.write`; Stage 1
-  uses `campaign:read` / `approval:decide`. They are separate systems and must not be
-  conflated. The FastAPI vocabulary is the one that survives.
+- **Single identity model.** The Phase A email-keyed path was deleted in the 2026-08-11
+  consolidation; `(issuer, subject)` in FastAPI is the only identity key, and the API's
+  scope vocabulary (`campaign:read` / `approval:decide`) is the only one.
