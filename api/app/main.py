@@ -15,6 +15,73 @@ from app.config import Settings
 from app.core.errors import http_exception_handler, problem_response, unhandled_exception_handler
 from app.core.logging import RequestIdLoggingMiddleware, configure_logging
 from app.db.session import create_database_engine, create_session_factory
+from app.gateway.adapters.base import ProviderAdapter
+from app.gateway.adapters.replay import RecordedCompletion, ReplayAdapter
+from app.gateway.errors import GatewayError
+from app.gateway.ledger import InMemoryLedger
+from app.gateway.service import GatewayService
+from app.knowledge.analyst import AnalystService
+from app.knowledge.sources import MarkdownFileSource
+
+
+def _install_analyst(application: FastAPI, settings: Settings) -> None:
+    """Build the gateway and Analyst once, at startup.
+
+    Chooses the adapter by credential: the real provider when one is
+    configured, recorded fixtures when it is not. That keeps every surface
+    reachable on a machine with no credentials, which is what makes the
+    Workspace demonstrable on a fresh clone.
+    """
+
+    keys = settings.gateway_keys()
+    adapter: ProviderAdapter
+    if keys.has("anthropic"):
+        from app.gateway.adapters.anthropic import AnthropicAdapter
+
+        adapter = AnthropicAdapter(keys)
+        application.state.gateway_mode = "live"
+    else:
+        adapter = ReplayAdapter(
+            [
+                RecordedCompletion(
+                    text=(
+                        '{"answer": "No model provider is configured, so this is a recorded '
+                        "reply rather than a generated one. Set ANTHROPIC_API_KEY to get real "
+                        'answers.", "citations": []}'
+                    )
+                )
+            ]
+        )
+        application.state.gateway_mode = "replay"
+
+    gateway = GatewayService(
+        adapter=adapter,
+        ledger=InMemoryLedger(default_cap_micros=settings.gateway_default_cap_micros),
+        kill_switch=lambda: settings.gateway_kill_switch,
+    )
+    application.state.gateway = gateway
+    application.state.analyst = AnalystService(
+        gateway=gateway,
+        source=MarkdownFileSource(settings.resolve_knowledge_root()),
+    )
+
+
+async def gateway_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Render a gateway failure as RFC 9457 problem details.
+
+    Each gateway error carries its own stable code, so the client can tell
+    "you are out of budget" from "the model declined" from "the provider is
+    down" — a distinction a generic 500 would erase.
+    """
+
+    error = exc if isinstance(exc, GatewayError) else GatewayError()
+    return problem_response(
+        request,
+        status_code=error.status_code,
+        title=error.code.replace("_", " ").title(),
+        code=error.code,
+        detail=error.detail,
+    )
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -38,9 +105,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         application.state.session_factory = create_session_factory(engine)
     if app_settings.oidc_issuer is not None:
         application.state.jwt_verifier = JwtVerifier(app_settings.require_oidc(), httpx.AsyncClient(timeout=5.0))
+    _install_analyst(application, app_settings)
     application.include_router(api_router)
     application.add_exception_handler(StarletteHTTPException, http_exception_handler)
     application.add_exception_handler(AuthError, auth_exception_handler)
+    application.add_exception_handler(GatewayError, gateway_exception_handler)
     application.add_exception_handler(Exception, unhandled_exception_handler)
 
     @application.exception_handler(404)

@@ -1,0 +1,4 @@
+.venv/
+.helm-worker/
+__pycache__/
+*.sqlite

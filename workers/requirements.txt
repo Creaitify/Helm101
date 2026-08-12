@@ -1,0 +1,13 @@
+# Deliberately absent: `anthropic`, `sqlalchemy`, `asyncpg`.
+#
+# Workers never hold a provider credential and never open a database
+# connection. Every model call goes through the gateway in `api/` over HTTP, and
+# every durable write goes through the API too. That is a structural guarantee,
+# not a convention — `tests/test_worker_boundaries.py` fails if a provider SDK
+# or database driver appears here or in an import.
+langgraph>=1.2,<2.0
+langgraph-checkpoint-sqlite>=3.1,<4.0
+httpx>=0.27,<1.0
+structlog>=24.4,<26.0
+pydantic>=2.9,<3.0
+pydantic-settings>=2.6,<3.0

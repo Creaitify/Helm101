@@ -4,11 +4,13 @@ HELM's authoritative FastAPI control-plane foundation. Stages 1–2 provide type
 
 ## Local setup (non-Docker)
 
-This project requires Python 3.12.x.
+This project requires Python 3.13 or 3.14 (`requires-python = ">=3.13,<3.15"`).
+`ruff` and `mypy` deliberately target 3.13, the lower bound, so code stays
+compatible with the oldest supported interpreter.
 
 ```powershell
 cd api
-py -3.12 -m venv .venv
+py -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 pip install -r requirements-dev.txt

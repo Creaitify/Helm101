@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.gateway.keys import ProviderKeys
 
 
 class HelmEnvironment(StrEnum):
@@ -57,12 +60,37 @@ class Settings(BaseSettings):
     oidc_jwks_cache_seconds: int = 300
     allow_dev_unassertion: bool = False
 
+    # --- Model gateway ---------------------------------------------------
+    anthropic_api_key: SecretStr | None = None
+    gateway_kill_switch: bool = False
+    gateway_default_cap_micros: int = 20_000_000
+
+    # --- Knowledge corpus ------------------------------------------------
+    # Defaults to the repository root, which is what makes the Analyst work on
+    # a fresh clone with no configuration at all.
+    knowledge_root: str | None = None
+
+    # --- Local-only escape hatch -----------------------------------------
+    # Resolving a caller's identity and memberships is a database read, so with
+    # no database configured there is no authenticated caller and every
+    # authenticated endpoint is unreachable. This yields a fixed local
+    # principal instead, so the Analyst is usable before Postgres exists.
+    #
+    # It is off by default and refused outright in staging and production, the
+    # same guard `allow_dev_unassertion` already establishes. Token
+    # verification itself is never weakened by it: when a database *is*
+    # configured, the real chain runs.
+    allow_local_principal: bool = False
+    local_principal_tenant_slug: str = "letstute"
+
     @field_validator(
         "database_url",
         "database_migration_url",
         "oidc_issuer",
         "oidc_jwks_url",
         "oidc_audience",
+        "anthropic_api_key",
+        "knowledge_root",
         mode="before",
     )
     @classmethod
@@ -114,7 +142,28 @@ class Settings(BaseSettings):
             raise ValueError("CORS_ORIGINS must not contain '*' in staging or production")
         if self.allow_dev_unassertion and self.helm_env in {HelmEnvironment.STAGING, HelmEnvironment.PRODUCTION}:
             raise ValueError("ALLOW_DEV_UNASSERTION must never be enabled in staging or production")
+        if self.allow_local_principal and self.helm_env in {HelmEnvironment.STAGING, HelmEnvironment.PRODUCTION}:
+            raise ValueError(
+                "ALLOW_LOCAL_PRINCIPAL must never be enabled in staging or production; "
+                "it bypasses identity and membership resolution entirely"
+            )
         return self
+
+    def gateway_keys(self) -> ProviderKeys:
+        """Provider credentials, read in exactly one place."""
+
+        return ProviderKeys(anthropic_api_key=self.anthropic_api_key)
+
+    def resolve_knowledge_root(self) -> Path:
+        """Where the Analyst's corpus lives.
+
+        Defaults to the repository root so a fresh clone works with no
+        configuration: `app/config.py` → `app` → `api` → repository root.
+        """
+
+        if self.knowledge_root:
+            return Path(self.knowledge_root)
+        return Path(__file__).resolve().parents[2]
 
     def require_database_url(self) -> str:
         """Return the pooled application URL only for database operations."""

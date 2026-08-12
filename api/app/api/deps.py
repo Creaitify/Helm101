@@ -11,6 +11,7 @@ from app.auth.errors import InsufficientScopeError, InvalidTokenError
 from app.auth.identity import resolve_identity
 from app.auth.jwt_verifier import JwtVerifier
 from app.auth.membership import AuthenticatedCaller, build_caller, select_membership
+from app.auth.principal import Principal
 from app.auth.scopes import Scope
 from app.config import Settings
 from app.db.repositories.identity import IdentityRepository
@@ -68,6 +69,44 @@ async def current_caller(
         memberships = await repository.list_active_memberships(session, identity.issuer, identity.subject)
     membership = select_membership(memberships, request.headers.get(TENANT_HINT_HEADER))
     return build_caller(identity.user_id, identity.issuer, identity.subject, membership)
+
+
+async def current_principal(request: Request) -> Principal:
+    """Resolve the acting principal, by the real chain wherever possible.
+
+    When a database and an OIDC issuer are configured, this is exactly
+    `current_caller` — the token is verified, the identity resolved, the
+    membership selected, the scopes computed. Nothing is skipped.
+
+    Only when neither is configured *and* `ALLOW_LOCAL_PRINCIPAL` is set does it
+    fall back to a fixed read-only local principal, so the Analyst is usable
+    before Postgres exists. That flag is refused in staging and production at
+    startup, so this branch cannot be reached there.
+    """
+
+    settings: Settings = request.app.state.settings
+    has_backing_services = (
+        getattr(request.app.state, "session_factory", None) is not None
+        and getattr(request.app.state, "jwt_verifier", None) is not None
+    )
+
+    if has_backing_services:
+        token = bearer_token(request)
+        caller = await current_caller(
+            request,
+            token=token,
+            verifier=get_verifier(request),
+            session_factory=get_session_factory(request),
+        )
+        return Principal.from_caller(caller)
+
+    if settings.allow_local_principal:
+        return Principal.local(settings.local_principal_tenant_slug)
+
+    # Neither a real chain nor an explicitly enabled local principal. Refusing
+    # is the only honest answer: serving the request would mean acting for a
+    # caller nobody identified.
+    raise InvalidTokenError
 
 
 def require_scope(scope: Scope) -> Callable[[AuthenticatedCaller], Awaitable[AuthenticatedCaller]]:
