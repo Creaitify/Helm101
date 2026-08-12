@@ -1,9 +1,15 @@
 # HELM — what is built, what is pending
 
-Last updated: 2026-08-11. Reflects the consolidation cleanup (branch `anzar`):
+Last updated: 2026-08-12. Reflects the consolidation cleanup (branch `anzar`):
 Phase A deleted, monorepo reshape (`api/`, `web/`, `workers/`), demo-mode data
 seam. Governed by the technical blueprint (HELM_Technical_Blueprint.pdf) and
 `HELM_ARCHITECTURE.md`: **consolidate and extend, not rewrite.**
+
+> **Read this first:** an independent post-cleanup audit
+> (`docs/reports/HELM_POST_CLEANUP_AUDIT_2026-08-12.md`) verified the current
+> state, corrected several status claims in this file, and lays out the
+> evidence-based resume plan (Phase 0 closure → Phases 1–2 before anything
+> else). Where this file and the audit disagree, trust the audit.
 
 This is the honest state of the platform: what actually works, what is blocked
 and on whom, and what remains unbuilt. Where something is deferred it says why.
@@ -109,7 +115,7 @@ phase where they become load-bearing.
 
 | Phase | Deliverable | Gate |
 |---|---|---|
-| **0. Foundation** | Consolidated repo (`api/ web/ workers/ docs/`), Phase A deleted, demo seam | ✅ this cleanup — all suites green |
+| **0. Foundation** | Consolidated repo (`api/ web/ workers/ docs/`), Phase A deleted, demo seam | ⚠️ partial — repo shape and web suites are green, but the blueprint's Phase 0 gate also requires CI, Sentry, a staging deployment, and a locally verified API suite (the stale `api/.venv` blocks pytest). See the audit, §5 |
 | **1. Close the auth gap** | BFF workload assertion verified by FastAPI; rate limiting | a direct-to-API call without the assertion fails in staging |
 | **2. Domain cutover** | campaigns / approvals / directory / integrations as real FastAPI endpoints; `lib/data` getters swap fixture → API at their `TODO(phase-2)` markers | UI reads only through the API client; demo mode still fully renders |
 | **3. Model gateway** | `gateway/{contracts,adapters/anthropic,ledger,service,keys}.py` in FastAPI; Langfuse tracing; routing table | the N-vs-cap concurrency test passes; 402 surfaces cleanly |
@@ -127,7 +133,15 @@ ledger.
 
 ---
 
-## Next: the model gateway (sub-project 3 / Phase 3)
+## Next: close Phase 0, then Phases 1–2 — the gateway comes after
+
+The audit's corrected sequencing: finish the Phase 0 gate (CI with
+fail-not-skip integration tests, Sentry, staging, reproducible setup, verified
+API suite), then close the auth/tenancy boundary (Phase 1) and restore real
+domain endpoints (Phase 2). Gateway *design* can proceed in parallel, but no
+Phase 3 code ships before the earlier gates are green.
+
+### Reference: the model gateway (sub-project 3 / Phase 3)
 
 | Module | Purpose |
 |---|---|
@@ -201,8 +215,10 @@ LLM observability.
 - **`npm audit` advisories** in `web` — re-check after the dependency pruning
   (`@neondatabase/serverless`, `tsx`, `playwright` removed); triage what
   remains.
-- **`api/.venv` predates the folder rename** — recreate it (`py -3.12 -m venv
-  .venv`) if pip misbehaves; pytest runs fine.
+- **`api/.venv` is stale** — it predates the folder rename and points at a
+  Python 3.12 installation that no longer exists, so pytest cannot start.
+  Recreate it with `py -3.13 -m venv .venv` (the project requires
+  `>=3.13,<3.14` per `api/pyproject.toml`) and reinstall requirements.
 
 ### UI backlog (from the retired followups.md — all pure frontend, unblocked)
 
@@ -243,7 +259,7 @@ the wrong reason, every one found in this repository.
 ## Local setup
 
 ```bash
-cd api && py -3.12 -m venv .venv \
+cd api && py -3.13 -m venv .venv \
   && ./.venv/Scripts/python.exe -m pip install -r requirements.txt -r requirements-dev.txt
 cd web && npm install
 ```
