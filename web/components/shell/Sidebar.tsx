@@ -112,12 +112,12 @@ export function Sidebar({
               {badge ? <span className="badge">{badge}</span> : null}
 
               {/* Interactive Tooltip on Hover (Collapsed Rail Only) */}
-              <div className="nav-hovercard" role="tooltip">
-                <div className="nav-hovercard-desc">{it.desc}</div>
+              <span className="nav-hovercard" role="tooltip">
+                <span className="nav-hovercard-desc">{it.desc}</span>
                 {badge ? (
-                  <div className="nav-hovercard-badge">{badge} pending checkpoint(s)</div>
+                  <span className="nav-hovercard-badge">{badge} pending checkpoint(s)</span>
                 ) : null}
-              </div>
+              </span>
             </Link>
           )
         })}
@@ -144,9 +144,9 @@ export function Sidebar({
                   {it.badge != null && <span className="badge">{it.badge}</span>}
 
                   {/* Interactive Tooltip on Hover (Collapsed Rail Only) */}
-                  <div className="nav-hovercard" role="tooltip">
-                    <div className="nav-hovercard-desc">{it.desc}</div>
-                  </div>
+                  <span className="nav-hovercard" role="tooltip">
+                    <span className="nav-hovercard-desc">{it.desc}</span>
+                  </span>
                 </Link>
               )
             })}
