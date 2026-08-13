@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import { Card } from '@/components/ui/Card'
 import { SegControl } from '@/components/ui/SegControl'
 import { StatTile } from '@/components/viz/StatTile'
@@ -8,6 +9,8 @@ import { FunnelChart } from '@/components/viz/FunnelChart'
 import { SplitBar } from '@/components/viz/SplitBar'
 import { RadialGauge } from '@/components/viz/RadialGauge'
 import { Heatmap } from '@/components/viz/Heatmap'
+import { MiniApprovalsWidget } from '@/components/viz/MiniApprovalsWidget'
+import { MessageSquare, Sparkles } from 'lucide-react'
 import { getKpis, getMetricStrip, getFunnel, getChannels, getActivity, getAnalyticsPanels } from '@/lib/data'
 
 export default async function AnalyticsPage() {
@@ -35,7 +38,16 @@ export default async function AnalyticsPage() {
           </h1>
           <p>Full-funnel campaign intelligence · last 30 days vs. prior period</p>
         </div>
-        <SegControl options={['24H', '7D', '30D', 'QTD', 'YTD']} value="30D" />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <Link
+            href="/workspace?q=Summarize+last+30d+funnel+conversion+bottlenecks+and+CAC+dispersion"
+            className="ask-analyst-chip"
+          >
+            <MessageSquare width={13} height={13} />
+            Ask Analyst on 30D Trends
+          </Link>
+          <SegControl options={['24H', '7D', '30D', 'QTD', 'YTD']} value="30D" />
+        </div>
       </div>
 
       <div className="hero">
@@ -68,9 +80,17 @@ export default async function AnalyticsPage() {
             </div>
           </div>
           <TrendChart />
-          <AIInsightChip>
-            AI insight · revenue is outpacing spend; forecast suggests +9% checkups next week if pacing holds.
-          </AIInsightChip>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+            <AIInsightChip>
+              AI insight · revenue is outpacing spend; forecast suggests +9% checkups next week if pacing holds.
+            </AIInsightChip>
+            <Link
+              href="/workspace?q=Why+is+revenue+outpacing+spend+and+how+should+we+allocate+the+forecasted+9+percent+checkup+lift%3F"
+              style={{ fontSize: 11.5, color: 'var(--violet-2)', textDecoration: 'none', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}
+            >
+              Drill-down with AI <MessageSquare width={11} height={11} />
+            </Link>
+          </div>
         </Card>
         <LiveActivityRail events={activity} />
       </div>
@@ -156,9 +176,17 @@ export default async function AnalyticsPage() {
                     <i style={{ width: `${row.pct}%` }} />
                   </div>
                 </div>
-                <div className="lstat">
-                  {row.stat}
-                  <small>CAC</small>
+                <div className="lstat" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+                  <div>
+                    {row.stat}
+                    <small>CAC</small>
+                  </div>
+                  <Link
+                    href={`/studio`}
+                    style={{ fontSize: 10, color: 'var(--violet-2)', textDecoration: 'none', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 2 }}
+                  >
+                    <Sparkles width={10} height={10} /> Remix
+                  </Link>
                 </div>
               </div>
             ))}
@@ -171,21 +199,9 @@ export default async function AnalyticsPage() {
               <h3>Approvals</h3>
               <div className="sub">waiting on you</div>
             </div>
-            <span className="pill r">3</span>
+            <span className="pill r">{panels.approvalsPreview.length}</span>
           </div>
-          <div className="lead">
-            {panels.approvalsPreview.map((row) => (
-              <div className="lrow" key={row.code}>
-                <div className="lthumb" style={{ background: row.color, width: 32, height: 32 }}>
-                  {row.code}
-                </div>
-                <div className="lmeta">
-                  <div className="t">{row.title}</div>
-                  <div className="s">{row.sub}</div>
-                </div>
-              </div>
-            ))}
-          </div>
+          <MiniApprovalsWidget initialItems={panels.approvalsPreview} />
         </Card>
       </div>
 

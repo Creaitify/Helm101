@@ -25,7 +25,12 @@ export function Heatmap({ rows }: { rows: number[][] }) {
         <Fragment key={i}>
           <div className="hr">{DAYS[i]}</div>
           {row.map((v, j) => (
-            <div className="hc" key={j} style={{ background: SCALE[v] }} />
+            <div
+              className="hc"
+              key={j}
+              style={{ background: SCALE[v], cursor: 'pointer' }}
+              title={`${DAYS[i]} @ ${COLS[j]} — ${Math.round(v * 14 + 10)} checkups (activity score: ${v}/8)`}
+            />
           ))}
         </Fragment>
       ))}

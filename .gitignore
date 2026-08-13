@@ -8,3 +8,7 @@ out/
 
 # screenshot artifacts
 screenshots/
+scratch/
+verify_*.mjs
+web/verify_*.mjs
+

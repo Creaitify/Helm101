@@ -10,6 +10,38 @@ import { Button } from '@/components/ui/Button'
 
 type Decided = { item: ApprovalItem; outcome: 'approved' | 'rejected' }
 
+function FormattedPayload({ payload }: { payload: string }) {
+  if (typeof payload === 'string' && (payload.trim().startsWith('{') || payload.trim().startsWith('['))) {
+    try {
+      const parsed = JSON.parse(payload)
+      if (parsed && typeof parsed === 'object') {
+        const summary = parsed.summary || parsed.action || parsed.description || 'Proposal prepared by agent.'
+        const metaTags: string[] = []
+        if (parsed.variant_count) metaTags.push(`${parsed.variant_count} variants`)
+        if (parsed.passed !== undefined) metaTags.push(`${parsed.passed} SEBI passed`)
+        if (parsed.shifts && Array.isArray(parsed.shifts)) metaTags.push(`${parsed.shifts.length} budget shifts`)
+
+        return (
+          <div className="appr-payload-clean">
+            <p className="appr-payload">{summary}</p>
+            {metaTags.length > 0 && (
+              <div className="appr-payload-meta">
+                {metaTags.map((tag, i) => (
+                  <span key={i} className="appr-meta-tag">{tag}</span>
+                ))}
+              </div>
+            )}
+          </div>
+        )
+      }
+    } catch {
+      // Fall through to plain text
+    }
+  }
+
+  return <p className="appr-payload">{payload}</p>
+}
+
 export function ApprovalsView({ items }: { items: ApprovalItem[] }) {
   const { setPending } = useApprovals()
   const { toast } = useToast()
@@ -29,6 +61,16 @@ export function ApprovalsView({ items }: { items: ApprovalItem[] }) {
       toast(`Failed to save ${outcome} for ${item.action} -- please retry`)
     })
   }
+
+  function approveAllClean() {
+    const cleanItems = pending.filter((it) => it.checks.every((c) => c.status === 'pass'))
+    if (cleanItems.length === 0) return
+    cleanItems.forEach((it) => {
+      decide(it, 'approved')
+    })
+    toast(`Batch approved ${cleanItems.length} verified proposal(s)`)
+  }
+
   function beginEdit(item: ApprovalItem) { setEditing(item); setDraftPayload(item.payload) }
   function saveEdit() {
     if (!editing) return
@@ -38,9 +80,21 @@ export function ApprovalsView({ items }: { items: ApprovalItem[] }) {
     toast('Proposal updated; review and approve when ready')
   }
 
+  const allCleanCount = pending.filter((it) => it.checks.every((c) => c.status === 'pass')).length
+
   return (
     <div className="content">
-      <div className="phead"><div><h1>Approvals Inbox</h1><p>Agents propose · you dispose · resumes from checkpoint</p></div></div>
+      <div className="phead">
+        <div>
+          <h1>Approvals Inbox</h1>
+          <p>Agents propose · you dispose · resumes from checkpoint</p>
+        </div>
+        {tab === 'pending' && allCleanCount > 1 && (
+          <Button variant="primary" onClick={approveAllClean}>
+            Approve All Clean ({allCleanCount})
+          </Button>
+        )}
+      </div>
       <Tabs tabs={[{ id: 'pending', label: `Pending (${pending.length})` }, { id: 'decided', label: `Decided (${decided.length})` }]} active={tab} onChange={setTab} />
       {tab === 'pending' && (
         <div className="appr-list">
@@ -51,7 +105,7 @@ export function ApprovalsView({ items }: { items: ApprovalItem[] }) {
                 <div className="appr-agent">{it.agentCode}</div>
                 <div><div className="appr-title">{it.summary}</div><div className="appr-sub">{it.agent} · {it.action} · {it.proposedAt}</div></div>
               </div>
-              <p className="appr-payload">{it.payload}</p>
+              <FormattedPayload payload={it.payload} />
               <div className="appr-checks">{it.checks.map((c, i) => <span key={i} className={`chk-pill ${c.status}`}>{c.label}</span>)}</div>
               <div className="appr-actions">
                 <Button variant="primary" onClick={() => decide(it, 'approved')}>Approve</Button>

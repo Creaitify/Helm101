@@ -41,17 +41,43 @@ def _install_analyst(application: FastAPI, settings: Settings) -> None:
         adapter = AnthropicAdapter(keys)
         application.state.gateway_mode = "live"
     else:
-        adapter = ReplayAdapter(
-            [
-                RecordedCompletion(
+        from app.gateway.contracts import TaskKind
+
+        def _replay_responder(request: Any) -> RecordedCompletion:
+            if request.task == TaskKind.MEDIA_BUYER_PROPOSAL:
+                return RecordedCompletion(
                     text=(
-                        '{"answer": "No model provider is configured, so this is a recorded '
-                        "reply rather than a generated one. Set ANTHROPIC_API_KEY to get real "
-                        'answers.", "citations": []}'
+                        '{"analysis": "Shift spend towards high-ROAS Retargeting and scale down non-brand search.", '
+                        '"shifts": [{"campaign_id": "cmp_meta_retargeting_01", "proposed_budget": 125000, "reason": "High conversion velocity"}, '
+                        '{"campaign_id": "cmp_google_search_nonbrand", "proposed_budget": 75000, "reason": "Shift funds to top performer"}]}'
                     )
                 )
-            ]
-        )
+            if request.task == TaskKind.CREATIVE_VARIANTS:
+                return RecordedCompletion(
+                    text=(
+                        '{"variants": [{"headline": "Complete Financial Health Checkup", "body": "Get a comprehensive portfolio review and unbiased financial roadmap today for ₹999."}, '
+                        '{"headline": "Transparent Financial Assessment", "body": "Understand your wealth, investments, and tax profile with SEBI-registered advisors."}, '
+                        '{"headline": "Take Control of Your Wealth", "body": "Clear, objective financial assessment designed to protect and grow your family assets."}]}'
+                    )
+                )
+            if request.task == TaskKind.GOVERNOR_PLAN:
+                return RecordedCompletion(
+                    text=(
+                        '{"plan_summary": "Coordinate multi-agent optimization for CAC reduction and creative refresh.", '
+                        '"delegations": [{"agent": "media_buyer", "task": "lower blended CAC across active campaigns", "rationale": "Reallocate search budget to top-performing social channels"}, '
+                        '{"agent": "creative", "task": "generate compliant copy for ₹999 checkup", "rationale": "Refresh copy variants for the new campaign push"}, '
+                        '{"agent": "analyst", "task": "evaluate recent checkup funnel drop-offs", "rationale": "Identify conversion leaks in onboarding"}]}'
+                    )
+                )
+            return RecordedCompletion(
+                text=(
+                    '{"answer": "No model provider is configured, so this is a recorded '
+                    "reply rather than a generated one. Set ANTHROPIC_API_KEY to get real "
+                    'answers.", "citations": []}'
+                )
+            )
+
+        adapter = ReplayAdapter(responder=_replay_responder)
         application.state.gateway_mode = "replay"
 
     gateway = GatewayService(

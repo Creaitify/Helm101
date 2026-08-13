@@ -4,7 +4,7 @@ import { usePathname } from 'next/navigation'
 import {
   LayoutDashboard,
   LineChart,
-  Image,
+  Image as ImageIcon,
   MessageSquare,
   Plug,
   CheckCircle,
@@ -14,6 +14,8 @@ import {
   Users,
   Settings,
   ChevronDown,
+  PanelLeftClose,
+  PanelLeft,
 } from 'lucide-react'
 import { NAV } from '@/lib/nav'
 import { can } from '@/lib/rbac'
@@ -24,7 +26,7 @@ import { useApprovals } from '@/lib/approvals'
 const ICONS = {
   LayoutDashboard,
   LineChart,
-  Image,
+  Image: ImageIcon,
   MessageSquare,
   Plug,
   CheckCircle,
@@ -35,7 +37,19 @@ const ICONS = {
   Settings,
 }
 
-export function Sidebar({ role, open = false, onNavigate = () => {} }: { role: Role; open?: boolean; onNavigate?: () => void }) {
+export function Sidebar({
+  role,
+  open = false,
+  collapsed = false,
+  onToggleCollapse,
+  onNavigate = () => {},
+}: {
+  role: Role
+  open?: boolean
+  collapsed?: boolean
+  onToggleCollapse?: () => void
+  onNavigate?: () => void
+}) {
   const pathname = usePathname()
   const { tenant } = useTenant()
   const { pending } = useApprovals()
@@ -44,15 +58,27 @@ export function Sidebar({ role, open = false, onNavigate = () => {} }: { role: R
   const master = visible.filter((it) => it.section === 'master')
 
   return (
-    <aside className={`side${open ? ' open' : ''}`}>
+    <aside className={`side${open ? ' open' : ''}${collapsed ? ' collapsed' : ''}`}>
       <div className="brand">
         <span className="mark">H</span>
-        <div>
+        <div className="brand-text">
           <b>HELM</b>
           <small>CONTROL PLANE</small>
         </div>
+        {onToggleCollapse && (
+          <button
+            type="button"
+            className="sidebar-collapse-btn"
+            onClick={onToggleCollapse}
+            aria-label={collapsed ? 'Maximize sidebar' : 'Minimize sidebar'}
+            title={collapsed ? 'Maximize sidebar (Expand)' : 'Minimize sidebar (Collapse)'}
+          >
+            {collapsed ? <PanelLeft width={15} height={15} /> : <PanelLeftClose width={15} height={15} />}
+          </button>
+        )}
       </div>
-      <div className="wsw">
+
+      <div className="wsw" title={`${tenant.name} (${tenant.region} · ${tenant.env})`}>
         <span className="d">{tenant.name.charAt(0)}</span>
         <div className="t">
           <b>{tenant.name}</b>
@@ -60,9 +86,10 @@ export function Sidebar({ role, open = false, onNavigate = () => {} }: { role: R
         </div>
         <ChevronDown />
       </div>
-      <div className="role-chip">
+
+      <div className="role-chip" title="Active Role: Master Admin (root access)">
         <span className="k" />
-        MASTER ADMIN · root
+        <span className="role-chip-text">MASTER ADMIN · root</span>
       </div>
 
       <div className="nlabel">Operate</div>
@@ -72,10 +99,24 @@ export function Sidebar({ role, open = false, onNavigate = () => {} }: { role: R
           const href = '/' + it.page
           const badge = it.page === 'approvals' ? pending : it.badge
           return (
-            <Link key={it.page} href={href} onClick={onNavigate} className={pathname === href ? 'active' : undefined}>
+            <Link
+              key={it.page}
+              href={href}
+              onClick={onNavigate}
+              className={pathname === href ? 'active' : undefined}
+              aria-label={it.label}
+            >
               <Icon />
-              {it.label}
+              <span className="nav-label">{it.label}</span>
               {badge ? <span className="badge">{badge}</span> : null}
+
+              {/* Interactive Tooltip on Hover */}
+              <div className="nav-hovercard" role="tooltip">
+                <div className="nav-hovercard-desc">{it.desc}</div>
+                {badge ? (
+                  <div className="nav-hovercard-badge">{badge} pending checkpoint(s)</div>
+                ) : null}
+              </div>
             </Link>
           )
         })}
@@ -89,10 +130,21 @@ export function Sidebar({ role, open = false, onNavigate = () => {} }: { role: R
               const Icon = ICONS[it.icon as keyof typeof ICONS]
               const href = '/' + it.page
               return (
-                <Link key={it.page} href={href} onClick={onNavigate} className={pathname === href ? 'active' : undefined}>
+                <Link
+                  key={it.page}
+                  href={href}
+                  onClick={onNavigate}
+                  className={pathname === href ? 'active' : undefined}
+                  aria-label={it.label}
+                >
                   <Icon />
-                  {it.label}
+                  <span className="nav-label">{it.label}</span>
                   {it.badge != null && <span className="badge">{it.badge}</span>}
+
+                  {/* Interactive Tooltip on Hover */}
+                  <div className="nav-hovercard" role="tooltip">
+                    <div className="nav-hovercard-desc">{it.desc}</div>
+                  </div>
                 </Link>
               )
             })}
@@ -100,7 +152,7 @@ export function Sidebar({ role, open = false, onNavigate = () => {} }: { role: R
         </>
       )}
 
-      <div className="user">
+      <div className="user" title="Aniket (root@letstute)">
         <span className="av">AN</span>
         <div className="t">
           <b>Aniket</b>

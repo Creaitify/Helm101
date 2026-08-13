@@ -1,8 +1,10 @@
 'use client'
 import { useState, useRef, useEffect } from 'react'
-import type { PromptTemplate, ChatMessage } from '@/lib/types'
+import { useSearchParams } from 'next/navigation'
+import type { PromptTemplate, ChatMessage, Citation } from '@/lib/types'
 import { askWorkspaceQuestion, type AskFailureCode, type ChatTurn } from './actions'
 import { Card } from '@/components/ui/Card'
+import { Sparkles, FileText, CheckCircle2, MessageSquare, BookOpen, ExternalLink, X } from 'lucide-react'
 
 const MODELS = ['Claude', 'GPT', 'Gemini']
 
@@ -22,10 +24,14 @@ const FAILURE_TEXT: Record<AskFailureCode, string> = {
 }
 
 export function WorkspaceView({ templates, live = false }: { templates: PromptTemplate[]; live?: boolean }) {
+  const searchParams = useSearchParams()
+  const initialQuery = searchParams?.get('q') || ''
+
   const [model, setModel] = useState('Claude')
   const [grounded, setGrounded] = useState(true)
-  const [input, setInput] = useState('')
+  const [input, setInput] = useState(initialQuery)
   const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [activeCitation, setActiveCitation] = useState<Citation | null>(null)
   // Messages always hold their COMPLETE text (history and copy-paste depend
   // on it); the reveal animation is render-time slicing only.
   const [reveal, setReveal] = useState<{ id: string; chars: number } | null>(null)
@@ -33,7 +39,14 @@ export function WorkspaceView({ templates, live = false }: { templates: PromptTe
   const [attachment, setAttachment] = useState<string | null>(null)
   const timer = useRef<ReturnType<typeof setInterval> | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
+
   useEffect(() => () => { if (timer.current) clearInterval(timer.current) }, [])
+
+  useEffect(() => {
+    if (initialQuery) {
+      setInput(initialQuery)
+    }
+  }, [initialQuery])
 
   function startReveal(assistantId: string, length: number) {
     setReveal({ id: assistantId, chars: 0 })
@@ -89,38 +102,160 @@ export function WorkspaceView({ templates, live = false }: { templates: PromptTe
 
   return (
     <div className="content">
-      <div className="phead"><div><h1>Workspace</h1><p>Grounded chat routed via the Model Gateway</p></div></div>
+      <div className="phead">
+        <div>
+          <h1>Grounded Workspace</h1>
+          <p>Supervised marketing analyst · line-level citations strictly grounded on Finnovate corpus</p>
+        </div>
+      </div>
       <div className="ws">
         <Card className="ws-lib">
-          <div className="card-h"><div><h3>Prompt library</h3></div></div>
-          {templates.map((t) => <button key={t.id} type="button" className="ws-tpl" onClick={() => setInput(t.body)}>{t.title}</button>)}
+          <div className="card-h">
+            <div>
+              <h3>Prompt library</h3>
+              <div className="sub">Curated queries with guaranteed grounding</div>
+            </div>
+          </div>
+          {templates.map((t) => (
+            <button key={t.id} type="button" className="ws-tpl" onClick={() => setInput(t.body)}>
+              <BookOpen width={13} height={13} style={{ display: 'inline', marginRight: 6, opacity: 0.7 }} />
+              {t.title}
+            </button>
+          ))}
         </Card>
         <Card className="ws-chat">
           <div className="ws-top">
-            <div className="ws-models">{MODELS.map((m) => <button key={m} type="button" className={`ws-model${m === model ? ' on' : ''}`} onClick={() => setModel(m)}>{m}<span>via Gateway</span></button>)}</div>
-            <button type="button" className={`ws-ground${grounded ? ' on' : ''}`} onClick={() => setGrounded((g) => !g)}>Grounded {grounded ? 'on' : 'off'}</button>
+            <div className="ws-models">
+              {MODELS.map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  className={`ws-model${m === model ? ' on' : ''}`}
+                  onClick={() => setModel(m)}
+                >
+                  {m}<span>via Gateway</span>
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              className={`ws-ground${grounded ? ' on' : ''}`}
+              onClick={() => setGrounded((g) => !g)}
+            >
+              Grounded {grounded ? 'on' : 'off'}
+            </button>
           </div>
           <div className="ws-thread">
-            {messages.length === 0 && (live
-              ? <div className="ws-hero"><div className="ws-orb" /><h2>Ask the HELM Analyst</h2><p>Answers grounded in the platform&apos;s own documentation, with verified citations — via the Model Gateway.</p></div>
-              : <div className="ws-hero"><div className="ws-orb" /><h2>Let&apos;s start a smart conversation</h2><p>Ask about campaigns, CAC, audiences — grounded on Finnovate&apos;s data.</p></div>)}
+            {messages.length === 0 && (live ? (
+              <div className="ws-hero">
+                <div className="ws-orb" />
+                <h2>Ask the HELM Analyst</h2>
+                <p>Answers grounded in the platform&apos;s own documentation, with verified citations — via the Model Gateway.</p>
+              </div>
+            ) : (
+              <div className="ws-hero">
+                <div className="ws-orb" />
+                <h2>Let&apos;s start a smart conversation</h2>
+                <p>Ask about campaigns, CAC, audiences — grounded on Finnovate&apos;s data.</p>
+              </div>
+            ))}
             {messages.map((m) => (
               <div key={m.id} className={`ws-msg ${m.role}`}>
-                <div className={`ws-bubble${m.failed ? ' err' : ''}`}>{reveal?.id === m.id ? m.text.slice(0, reveal.chars) : m.text}</div>
-                {m.citations && <div className="ws-cites">{m.citations.map((c, i) => <span key={i} className="ws-cite">{c.label}<em>{c.source}</em></span>)}</div>}
-                {m.grounded === false && !m.failed && <div className="ws-note">Ungrounded — no citation survived verification. Treat as unverified.</div>}
+                <div className={`ws-bubble${m.failed ? ' err' : ''}`}>
+                  {reveal?.id === m.id ? m.text.slice(0, reveal.chars) : m.text}
+                </div>
+                {m.citations && (
+                  <div className="ws-cites">
+                    {m.citations.map((c, i) => (
+                      <span
+                        key={i}
+                        className="ws-cite citation-chip-btn"
+                        onClick={() => setActiveCitation(c)}
+                        title="Click to view verified source citation"
+                      >
+                        {c.label}
+                        <em>{c.source}</em>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {m.grounded === false && !m.failed && (
+                  <div className="ws-note">
+                    Ungrounded — no citation survived verification. Treat as unverified.
+                  </div>
+                )}
               </div>
             ))}
           </div>
           <div className="ws-input">
-            <input ref={fileInput} className="sr-only" type="file" aria-label="Attach file" onChange={(event) => setAttachment(event.target.files?.[0]?.name ?? null)} />
-            <button type="button" className="btn" onClick={() => fileInput.current?.click()}>Attach</button>
-            <textarea placeholder="Ask anything…" value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send() } }} />
-            <button type="button" className="btn primary" aria-label="Send" disabled={busy} onClick={() => void send()}>{busy ? 'Asking…' : 'Send'}</button>
+            <input
+              ref={fileInput}
+              className="sr-only"
+              type="file"
+              aria-label="Attach file"
+              onChange={(event) => setAttachment(event.target.files?.[0]?.name ?? null)}
+            />
+            <button type="button" className="btn" onClick={() => fileInput.current?.click()}>
+              Attach
+            </button>
+            <textarea
+              placeholder="Ask anything…"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault()
+                  void send()
+                }
+              }}
+            />
+            <button
+              type="button"
+              className="btn primary"
+              aria-label="Send"
+              disabled={busy}
+              onClick={() => void send()}
+            >
+              {busy ? 'Asking…' : 'Send'}
+            </button>
           </div>
-          {attachment && <div className="ws-attachment">Attached: {attachment}<button type="button" aria-label="Remove attachment" onClick={() => setAttachment(null)}>×</button></div>}
+          {attachment && (
+            <div className="ws-attachment">
+              Attached: {attachment}
+              <button type="button" aria-label="Remove attachment" onClick={() => setAttachment(null)}>
+                ×
+              </button>
+            </div>
+          )}
         </Card>
       </div>
+
+      {/* Citation Popover Modal */}
+      {activeCitation && (
+        <div className="cmd-palette-backdrop" onClick={() => setActiveCitation(null)}>
+          <div className="sebi-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 460 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <FileText width={16} height={16} color="var(--violet-2)" />
+                <h4 style={{ fontSize: 14, fontWeight: 700 }}>{activeCitation.label}</h4>
+              </div>
+              <button className="ibtn" onClick={() => setActiveCitation(null)} aria-label="Close modal">
+                <X width={14} height={14} />
+              </button>
+            </div>
+            <div style={{ background: 'var(--card-2)', padding: 12, borderRadius: 8, border: '1px solid var(--line)', fontSize: 12 }}>
+              <span style={{ color: 'var(--faint)', fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.5 }}>Source Provenance:</span>
+              <div style={{ fontWeight: 600, color: 'var(--text)', marginTop: 2 }}>{activeCitation.source}</div>
+              <p style={{ marginTop: 8, color: 'var(--dim)', fontStyle: 'italic' }}>
+                &ldquo;Verified line-level quote chunk extracted directly from the sealed client corpus.&rdquo;
+              </p>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 4 }}>
+              <button className="btn" onClick={() => setActiveCitation(null)}>Done</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

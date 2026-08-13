@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import sys
 from typing import Any
 
@@ -35,6 +36,16 @@ from helm_worker.config import WorkerSettings
 from helm_worker.gateway_client import GatewayCallFailed, GatewayClient
 from helm_worker.logging import configure_logging
 from helm_worker.runtime import AgentRuntime, AnalystRuntime, RunHandle
+
+
+def _handle_to_dict(handle: RunHandle) -> dict[str, Any]:
+    return {
+        "run_id": handle.run_id,
+        "status": handle.status,
+        "is_awaiting_approval": handle.is_awaiting_approval,
+        "interrupt_payload": handle.interrupt_payload,
+        "state": handle.state,
+    }
 
 
 def _print_handle(handle: RunHandle) -> None:
@@ -134,6 +145,33 @@ async def _run(args: argparse.Namespace) -> int:
                 # Pre-roster run ids were bare UUIDs from the Analyst.
                 return by_prefix.get(prefix, analyst)
 
+            if args.command == "pending":
+                thread_ids: list[str] = []
+                async for checkpoint in checkpointer.alist(None, limit=100):
+                    cfg = checkpoint.config if hasattr(checkpoint, "config") else {}
+                    configurable = cfg.get("configurable", {}) if isinstance(cfg, dict) else {}
+                    thread_id = configurable.get("thread_id")
+                    if thread_id and thread_id not in thread_ids:
+                        thread_ids.append(thread_id)
+
+                pending_handles: list[RunHandle] = []
+                for thread_id in thread_ids:
+                    try:
+                        handle = await runtime_for(thread_id).inspect(thread_id)
+                        if handle.is_awaiting_approval or handle.status == "awaiting_approval":
+                            pending_handles.append(handle)
+                    except Exception:
+                        continue
+
+                if getattr(args, "json", False):
+                    print(json.dumps([_handle_to_dict(h) for h in pending_handles]))
+                else:
+                    print(f"Found {len(pending_handles)} pending run(s) awaiting approval:")
+                    for h in pending_handles:
+                        print(f"\n--- {h.run_id} ({h.status}) ---")
+                        _print_handle(h)
+                return 0
+
             handle: RunHandle
             if args.command == "ask":
                 handle = await analyst.start(args.question, run_id=args.run_id)
@@ -143,7 +181,8 @@ async def _run(args: argparse.Namespace) -> int:
                     "campaigns": SAMPLE_CAMPAIGNS,
                     "data_label": SAMPLE_LABEL,
                 }
-                print(f"[data] {SAMPLE_LABEL} — synthetic sample campaigns, not a live ad account")
+                if not getattr(args, "json", False):
+                    print(f"[data] {SAMPLE_LABEL} — synthetic sample campaigns, not a live ad account")
                 handle = await media_buyer.start_with(initial, run_id=args.run_id)
             elif args.command == "create":
                 handle = await creative.start_with({"brief": args.brief}, run_id=args.run_id)
@@ -157,11 +196,17 @@ async def _run(args: argparse.Namespace) -> int:
             else:
                 handle = await runtime_for(args.run_id).inspect(args.run_id)
 
-            _print_handle(handle)
+            if getattr(args, "json", False):
+                print(json.dumps(_handle_to_dict(handle)))
+            else:
+                _print_handle(handle)
             return 0
     except GatewayCallFailed as error:
-        print(f"[gateway] {error.code}: {error}", file=sys.stderr)
-        print("Is the API running?  cd api && ./.venv/Scripts/uvicorn app.main:app --port 8000", file=sys.stderr)
+        if getattr(args, "json", False):
+            print(json.dumps({"error": error.code, "message": str(error)}), file=sys.stderr)
+        else:
+            print(f"[gateway] {error.code}: {error}", file=sys.stderr)
+            print("Is the API running?  cd api && ./.venv/Scripts/uvicorn app.main:app --port 8000", file=sys.stderr)
         return 2
     finally:
         await gateway.aclose()
@@ -175,34 +220,45 @@ def main(argv: list[str] | None = None) -> int:
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
 
-    parser = argparse.ArgumentParser(prog="helm_worker", description="HELM's durable agent runtime.")
+    json_parent = argparse.ArgumentParser(add_help=False)
+    json_parent.add_argument("--json", action="store_true", help="Output results as JSON")
+
+    parser = argparse.ArgumentParser(
+        prog="helm_worker", description="HELM's durable agent runtime.", parents=[json_parent]
+    )
     commands = parser.add_subparsers(dest="command", required=True)
 
-    ask = commands.add_parser("ask", help="Analyst: answer a question; pauses for your approval.")
+    ask = commands.add_parser("ask", help="Analyst: answer a question; pauses for your approval.", parents=[json_parent])
     ask.add_argument("question")
     ask.add_argument("--run-id", default=None, help="Reuse a specific run id.")
 
-    buy = commands.add_parser("buy", help="Media Buyer: propose budget shifts on the sample campaigns.")
+    buy = commands.add_parser(
+        "buy", help="Media Buyer: propose budget shifts on the sample campaigns.", parents=[json_parent]
+    )
     buy.add_argument("--objective", default="lower blended CAC without losing checkup volume")
     buy.add_argument("--run-id", default=None)
 
-    create = commands.add_parser("create", help="Creative: draft three compliance-checked copy variants.")
+    create = commands.add_parser(
+        "create", help="Creative: draft three compliance-checked copy variants.", parents=[json_parent]
+    )
     create.add_argument("brief")
     create.add_argument("--run-id", default=None)
 
-    govern = commands.add_parser("govern", help="Governor: plan delegations across the roster.")
+    govern = commands.add_parser("govern", help="Governor: plan delegations across the roster.", parents=[json_parent])
     govern.add_argument("objective")
     govern.add_argument("--run-id", default=None)
 
-    decide = commands.add_parser("decide", help="Approve or reject a paused run (any agent).")
+    decide = commands.add_parser("decide", help="Approve or reject a paused run (any agent).", parents=[json_parent])
     decide.add_argument("run_id")
     group = decide.add_mutually_exclusive_group(required=True)
     group.add_argument("--approve", action="store_true")
     group.add_argument("--reject", action="store_true")
     decide.add_argument("--reason", default="")
 
-    status = commands.add_parser("status", help="Show a run's current position (any agent).")
+    status = commands.add_parser("status", help="Show a run's current position (any agent).", parents=[json_parent])
     status.add_argument("run_id")
+
+    commands.add_parser("pending", help="List all runs currently awaiting approval.", parents=[json_parent])
 
     return asyncio.run(_run(parser.parse_args(argv)))
 

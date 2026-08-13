@@ -1,26 +1,67 @@
 'use server'
 
-import { HelmApiError } from '@/lib/server/helm-api-errors'
-import { UnauthenticatedError } from '@/lib/server/session-token'
-import { runAgentCompletion, type AgentTask } from '@/lib/server/agent-completions'
+import { startAgentRun, decideAgentRun, getAgentRunStatus } from '@/lib/server/agent-runner'
 
-export type AgentRunResult =
-  | { ok: true; task: AgentTask; data: string; requestId: string }
-  | { ok: false; code: 'unauthenticated' | 'budget_exceeded' | 'kill_switch_engaged' | 'provider_refused' | 'upstream_unreachable' | 'upstream_error' }
+export type AgentKind = 'governor' | 'media_buyer' | 'creative' | 'analyst'
 
-type AgentFailure = Extract<AgentRunResult, { ok: false }>['code']
+export interface AgentActionResponse {
+  ok: boolean
+  runId?: string
+  agent?: AgentKind
+  status?: string
+  isAwaitingApproval?: boolean
+  interruptPayload?: Record<string, any> | null
+  state?: Record<string, any>
+  error?: string
+}
 
-const TASKS = new Set<AgentTask>(['governor.plan', 'media_buyer.proposal', 'creative.variants'])
-const PASSTHROUGH = new Set(['budget_exceeded', 'kill_switch_engaged', 'provider_refused', 'upstream_unreachable'])
+export async function executeAgent(
+  agent: AgentKind,
+  input: string,
+): Promise<AgentActionResponse> {
+  if (!input.trim()) {
+    return { ok: false, error: 'Please enter a goal or prompt for the agent.' }
+  }
 
-export async function runAgent(task: string, prompt: string): Promise<AgentRunResult> {
-  if (!TASKS.has(task as AgentTask) || !prompt.trim() || prompt.length > 20_000) return { ok: false, code: 'upstream_error' }
-  try {
-    const response = await runAgentCompletion(task as AgentTask, prompt.trim())
-    return { ok: true, task: task as AgentTask, data: response.data, requestId: response.meta.request_id }
-  } catch (error) {
-    if (error instanceof UnauthenticatedError) return { ok: false, code: 'unauthenticated' }
-    if (error instanceof HelmApiError && PASSTHROUGH.has(error.code)) return { ok: false, code: error.code as AgentFailure }
-    return { ok: false, code: 'upstream_error' }
+  const result = await startAgentRun(agent, input.trim())
+  return {
+    ok: result.ok,
+    runId: result.runId,
+    agent,
+    status: result.status,
+    isAwaitingApproval: result.isAwaitingApproval,
+    interruptPayload: result.interruptPayload,
+    state: result.state,
+    error: result.error,
+  }
+}
+
+export async function decideAgent(
+  runId: string,
+  decision: 'approved' | 'rejected',
+  reason: string = '',
+): Promise<AgentActionResponse> {
+  const result = await decideAgentRun(runId, decision, reason)
+  return {
+    ok: result.ok,
+    runId: result.runId,
+    status: result.status,
+    isAwaitingApproval: result.isAwaitingApproval,
+    interruptPayload: result.interruptPayload,
+    state: result.state,
+    error: result.error,
+  }
+}
+
+export async function inspectAgent(runId: string): Promise<AgentActionResponse> {
+  const result = await getAgentRunStatus(runId)
+  return {
+    ok: result.ok,
+    runId: result.runId,
+    status: result.status,
+    isAwaitingApproval: result.isAwaitingApproval,
+    interruptPayload: result.interruptPayload,
+    state: result.state,
+    error: result.error,
   }
 }
