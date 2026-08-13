@@ -114,8 +114,18 @@ def main(argv: list[str] | None = None) -> int:
 
     import os
 
-    api_key = args.api_key or os.environ.get("ANTHROPIC_API_KEY") or None
-    root = args.root or _repository_root()
+    from app.config import Settings
+
+    settings = Settings()
+    api_key = (
+        args.api_key
+        or os.environ.get("ANTHROPIC_API_KEY")
+        or (settings.anthropic_api_key.get_secret_value() if settings.anthropic_api_key else None)
+    )
+    root = args.root or settings.resolve_knowledge_root()
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
     return asyncio.run(_run(args.question, root, api_key))
 
 

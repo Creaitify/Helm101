@@ -10,6 +10,7 @@ Modelled on `tenants.py`, which is the canonical endpoint in this codebase.
 
 from __future__ import annotations
 
+from typing import Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Request
@@ -17,10 +18,27 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.deps import current_principal
 from app.auth.principal import Principal
+from app.gateway.contracts import Message, Role
 from app.gateway.errors import GatewayError
 from app.knowledge.analyst import AnalystService
 
 router = APIRouter(tags=["workspace"])
+
+
+class HistoryTurn(BaseModel):
+    """One prior turn of the conversation, replayed by the client.
+
+    The server stores no conversation state (persistence is a Phase 5+
+    concern), so continuity is the client's job: it sends the turns it wants
+    the model to see. The whole payload is caller-controlled and is treated
+    as exactly that — prior *conversation*, never instructions; the system
+    prompt's untrusted-content rules apply to it the same as to documents.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=4_000)
 
 
 class QuestionRequest(BaseModel):
@@ -29,6 +47,10 @@ class QuestionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     question: str = Field(min_length=1, max_length=4_000)
+    # Bounded so a caller cannot stuff the context window: 20 turns of 4k
+    # characters is ~20k tokens, well inside the model budget alongside the
+    # retrieved sections.
+    history: list[HistoryTurn] = Field(default_factory=list, max_length=20)
 
 
 class CitationOut(BaseModel):
@@ -100,6 +122,7 @@ async def ask_question(
             tenant_id=principal.tenant_id,
             request_id=request_id,
             idempotency_key=idempotency_key,
+            history=[Message(role=Role(turn.role), content=turn.content) for turn in body.history],
         )
     except GatewayError:
         # Re-raised unchanged so the gateway's stable problem code reaches the

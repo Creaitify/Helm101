@@ -28,6 +28,9 @@ class TaskKind(StrEnum):
 
     ANALYST_ANSWER = "analyst.answer"
     ANALYST_ROUTE = "analyst.route"
+    MEDIA_BUYER_PROPOSAL = "media_buyer.proposal"
+    CREATIVE_VARIANTS = "creative.variants"
+    GOVERNOR_PLAN = "governor.plan"
 
 
 class Role(StrEnum):

@@ -333,3 +333,28 @@ async def test_a_missing_root_yields_an_empty_corpus_rather_than_raising(tmp_pat
 @pytest.mark.parametrize("question", ["", "   ", "the a of"])
 def test_an_empty_or_stopword_only_question_matches_nothing(question: str) -> None:
     assert Corpus(_sections()).search(question) == []
+
+
+def test_the_overview_takes_each_documents_leading_section() -> None:
+    """The fallback for questions retrieval cannot score ("what is HELM?").
+
+    A document's first section is its own introduction, so the set of first
+    sections is the corpus's answer to "describe this platform".
+    """
+
+    sections = _sections() + parse_sections("docs/other.md", "# Other\n\nAnother document.\n")
+
+    overview = Corpus(sections).overview()
+
+    assert [(s.doc, s.heading) for s in overview] == [("docs/example.md", ""), ("docs/other.md", "Other")]
+
+
+def test_the_overview_skips_a_section_that_exceeds_the_budget_whole() -> None:
+    big = parse_sections("docs/big.md", "# Big\n\n" + "x" * 200 + "\n")
+    small = parse_sections("docs/small.md", "# Small\n\nFits.\n")
+
+    # Budget below the big section's cost: it is skipped entirely (a truncated
+    # section could not verify its citations), the small one still selected.
+    overview = Corpus(big + small).overview(token_budget=20)
+
+    assert [s.doc for s in overview] == ["docs/small.md"]

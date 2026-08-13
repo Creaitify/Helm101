@@ -21,18 +21,31 @@ export const env = {
   appEnv: optional('HELM_ENV') ?? 'development',
 } as const
 
+// isDemoMode lives in lib/demo-mode.ts (proxy.ts needs it and cannot import
+// through `server-only`); re-exported here so server code keeps one import
+// path for its environment questions.
+export { isDemoMode } from '../demo-mode'
+
 /**
- * Demo mode serves every surface from fixtures and skips the helm-api tenant
- * lookup. An explicit HELM_DEMO_MODE=true/false always wins; when unset, demo
- * is the default exactly when no HELM_API_BASE_URL is configured, so a fresh
- * checkout with an empty .env.local still renders the full UI with zero
- * setup. Computed per call (not baked into the frozen object above) so tests
- * can vary the environment.
+ * The web-side counterpart of the API's ALLOW_LOCAL_PRINCIPAL: lets the
+ * Workspace ask the real Analyst without an Auth0 session, so the live agent
+ * is demonstrable in a browser before the Auth0 dashboard step is done. The
+ * API ignores the bearer value entirely in local-principal mode, so no
+ * credential is fabricated here — the placeholder only satisfies the client's
+ * request shape.
+ *
+ * Mirrors the API's guard rather than its own invention: refused loudly in
+ * staging and production (the API refuses ALLOW_LOCAL_PRINCIPAL at startup
+ * the same way), and inert without a configured API to talk to.
  */
-export function isDemoMode(): boolean {
-  const explicit = optional('HELM_DEMO_MODE')
-  if (explicit !== undefined) return explicit === 'true'
-  return !optional('HELM_API_BASE_URL')
+export function allowLocalAnalyst(): boolean {
+  if (optional('ALLOW_LOCAL_ANALYST') !== 'true') return false
+  if (!optional('HELM_API_BASE_URL')) return false
+  const appEnv = optional('HELM_ENV') ?? 'development'
+  if (appEnv === 'staging' || appEnv === 'production') {
+    throw new Error('ALLOW_LOCAL_ANALYST must never be enabled in staging or production')
+  }
+  return true
 }
 
 export function requireServerEnv<K extends keyof typeof env>(key: K): NonNullable<(typeof env)[K]> {

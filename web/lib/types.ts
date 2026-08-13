@@ -53,7 +53,16 @@ export interface Variant { id: string; kind: VariantKind; headline: string; body
 
 export interface PromptTemplate { id: string; title: string; body: string }
 export interface Citation { label: string; source: string }
-export interface ChatMessage { id: string; role: 'user' | 'assistant'; text: string; citations?: Citation[] }
+export interface ChatMessage {
+  id: string
+  role: 'user' | 'assistant'
+  text: string
+  citations?: Citation[]
+  /** Assistant only. False = no citation survived verification; the UI must say so. */
+  grounded?: boolean
+  /** Assistant only. The ask failed; `text` carries the human-readable reason. */
+  failed?: boolean
+}
 
 export interface PolicyCheck { label: string; status: 'pass' | 'warn' }
 export interface ApprovalItem { id: string; agent: string; agentCode: string; action: string; summary: string; payload: string; proposedAt: string; checks: PolicyCheck[] }

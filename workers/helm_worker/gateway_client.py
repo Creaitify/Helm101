@@ -107,6 +107,56 @@ class GatewayClient:
             citations_rejected=int(meta.get("citations_rejected", 0)),
         )
 
+    async def complete(
+        self,
+        task: str,
+        messages: list[dict[str, str]],
+        *,
+        system: str = "",
+        json_schema: dict[str, object] | None = None,
+        max_tokens: int = 4_096,
+        idempotency_key: str | None = None,
+    ) -> str:
+        """Run one reasoning step of a named agent task through the gateway.
+
+        Same custody rules as `ask`: the control plane resolves policy,
+        reserves budget and calls the provider; this worker never sees a key.
+        Returns the raw completion text — parsing it is the caller's job,
+        because the caller declared the schema.
+        """
+
+        headers = {"Content-Type": "application/json"}
+        if idempotency_key:
+            headers["Idempotency-Key"] = idempotency_key
+
+        body: dict[str, object] = {"task": task, "messages": messages, "max_tokens": max_tokens}
+        if system:
+            body["system"] = system
+        if json_schema is not None:
+            body["json_schema"] = json_schema
+
+        try:
+            response = await self._client.post(
+                f"{self._base_url}/api/v1/agents/completions",
+                json=body,
+                headers=headers,
+            )
+        except httpx.TimeoutException as error:
+            raise GatewayCallFailed("The control plane did not respond in time.", code="provider_timeout") from error
+        except httpx.HTTPError as error:
+            raise GatewayCallFailed("The control plane is unreachable.") from error
+
+        if response.status_code >= 400:
+            raise GatewayCallFailed(
+                _problem_detail(response),
+                code=_problem_code(response),
+                status_code=response.status_code,
+            )
+
+        payload = response.json()
+        data = payload.get("data", "") if isinstance(payload, dict) else ""
+        return str(data)
+
     async def aclose(self) -> None:
         if self._owns_client:
             await self._client.aclose()

@@ -4,6 +4,7 @@ import { ApprovalsProvider } from '@/lib/approvals'
 import { ToastProvider } from '@/components/ui/Toast'
 import { AppShell } from '@/components/shell/AppShell'
 import { loadShellData, NoMembershipError } from '@/lib/server/shell-data'
+import { isDemoMode } from '@/lib/server/env'
 import { UnauthenticatedError } from '@/lib/server/tenant-directory'
 import { HelmApiError } from '@/lib/server/helm-api-errors'
 import type { SwitchableTenant } from '@/lib/types'
@@ -32,7 +33,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     <TenantProvider value={value}>
       <ApprovalsProvider>
         <ToastProvider>
-          <AppShell switchableTenants={switcher.tenants} activeTenantId={switcher.activeId}>
+          <AppShell
+            switchableTenants={switcher.tenants}
+            activeTenantId={switcher.activeId}
+            dataMode={isDemoMode() ? 'demo' : 'live'}
+          >
             {children}
           </AppShell>
         </ToastProvider>

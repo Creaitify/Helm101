@@ -16,11 +16,11 @@ async function loadClient(values: Record<string, string | undefined>) {
     if (value === undefined) delete process.env[key]
     else process.env[key] = value
   }
-  const [{ helmApiGet }, { HelmApiError }] = await Promise.all([
+  const [{ helmApiGet, helmApiPost }, { HelmApiError }] = await Promise.all([
     import('@/lib/server/helm-api-client'),
     import('@/lib/server/helm-api-errors'),
   ])
-  return { helmApiGet, HelmApiError }
+  return { helmApiGet, helmApiPost, HelmApiError }
 }
 
 beforeEach(() => {
@@ -153,6 +153,50 @@ describe('helmApiGet', () => {
   })
 })
 
+describe('helmApiPost', () => {
+  it('serialises the body as JSON with the matching content type', async () => {
+    const { helmApiPost } = await loadClient({ HELM_API_BASE_URL: 'http://api.test' })
+    fetchMock.mockResolvedValue(jsonResponse(200, { data: 'ok' }))
+    await helmApiPost({
+      path: '/api/v1/workspace/questions',
+      accessToken: 't',
+      body: { question: 'why?' },
+    })
+
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('http://api.test/api/v1/workspace/questions')
+    expect(init.method).toBe('POST')
+    expect(init.headers['Content-Type']).toBe('application/json')
+    expect(JSON.parse(init.body)).toEqual({ question: 'why?' })
+    expect(init.headers.Authorization).toBe('Bearer t')
+    expect(init.cache).toBe('no-store')
+  })
+
+  it('sends the idempotency key only when given', async () => {
+    const { helmApiPost } = await loadClient({ HELM_API_BASE_URL: 'http://api.test' })
+    fetchMock.mockResolvedValue(jsonResponse(200, {}))
+    await helmApiPost({ path: '/p', accessToken: 't', body: {}, idempotencyKey: 'key-1' })
+    expect(fetchMock.mock.calls[0][1].headers['Idempotency-Key']).toBe('key-1')
+
+    fetchMock.mockResolvedValue(jsonResponse(200, {}))
+    await helmApiPost({ path: '/p', accessToken: 't', body: {} })
+    expect(fetchMock.mock.calls[1][1].headers['Idempotency-Key']).toBeUndefined()
+  })
+
+  it('translates a gateway problem response without echoing the body', async () => {
+    const { helmApiPost, HelmApiError } = await loadClient({ HELM_API_BASE_URL: 'http://api.test' })
+    fetchMock.mockResolvedValue(
+      jsonResponse(409, { code: 'budget_exceeded' }, 'application/problem+json'),
+    )
+    const error = await helmApiPost({ path: '/p', accessToken: 't', body: {} }).catch(
+      (e: unknown) => e,
+    )
+    expect(error).toBeInstanceOf(HelmApiError)
+    expect((error as HelmApiErrorType).code).toBe('budget_exceeded')
+    expect((error as HelmApiErrorType).status).toBe(409)
+  })
+})
+
 /**
  * The timeout gets its own block because it has to be driven artificially.
  *
@@ -282,6 +326,27 @@ describe('helmApiGet request timeout', () => {
     expect(error).toBeInstanceOf(HelmApiError)
     // The caller's own signal was never the thing that aborted.
     expect(callerSignal.aborted).toBe(false)
+  })
+
+  it('a POST that opts into the generation budget arms that deadline, not the render one', async () => {
+    const timeout = stubTimeout()
+    vi.stubGlobal('fetch', fetchThatOnlySettlesOnAbort())
+    const { helmApiPost } = await loadClient({ HELM_API_BASE_URL: 'http://api.test' })
+    const { GENERATION_TIMEOUT_MS } = await import('@/lib/server/helm-api-client')
+
+    const pending = helmApiPost({
+      path: '/api/v1/workspace/questions',
+      accessToken: 't',
+      body: { question: 'q' },
+      timeoutMs: GENERATION_TIMEOUT_MS,
+    }).catch((e: unknown) => e)
+
+    // A longer deadline, never no deadline.
+    expect(timeout.durations).toEqual([GENERATION_TIMEOUT_MS])
+    expect(GENERATION_TIMEOUT_MS).toBe(60_000)
+
+    timeout.fire()
+    await pending
   })
 
   it('still honours a caller signal that aborts before the timeout', async () => {

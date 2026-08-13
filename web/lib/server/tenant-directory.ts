@@ -1,9 +1,10 @@
 import 'server-only'
-import { cookies, headers } from 'next/headers'
-import { getToken } from 'next-auth/jwt'
-import { env } from './env'
 import { helmApiGet } from './helm-api-client'
 import { HelmApiError } from './helm-api-errors'
+import { requireAccessToken, UnauthenticatedError } from './session-token'
+
+// Re-exported so existing importers (app layout, tests) keep one stable path.
+export { UnauthenticatedError }
 
 export interface TenantSummary {
   id: string
@@ -26,14 +27,6 @@ export interface TenantContextMeta {
 export interface TenantDirectory {
   tenants: TenantSummary[]
   meta: TenantContextMeta | null
-}
-
-/** The caller has no decodable session token. Callers redirect to /login. */
-export class UnauthenticatedError extends Error {
-  constructor() {
-    super('The caller is not authenticated')
-    this.name = 'UnauthenticatedError'
-  }
 }
 
 interface TenantListResponse {
@@ -61,22 +54,9 @@ interface TenantListResponse {
  * hint should treat an empty result as possibly-stale and retry without it.
  */
 export async function listTenantsFromApi(options?: { tenantHint?: string }): Promise<TenantDirectory> {
-  // Read the credential straight out of the encrypted session cookie rather
-  // than from `getServerSession()`. The session object is what next-auth serves
-  // as the body of `GET /api/auth/session`, so the access token deliberately is
-  // not on it (see the session callback in auth.ts). `getToken` decrypts the
-  // JWT in-process; the token never crosses a response boundary.
-  //
-  // In Next 16 `cookies()` and `headers()` are async: `cookies()` returns a
-  // store exposing `getAll()` and `headers()` returns a Web `Headers` -- both
-  // shapes `getToken`'s SessionStore already handles.
-  const [cookieStore, headerList] = await Promise.all([cookies(), headers()])
-  const token = await getToken({
-    req: { cookies: cookieStore, headers: headerList } as never,
-    secret: env.authSecret,
-  })
-  const accessToken = token?.accessToken
-  if (!accessToken) throw new UnauthenticatedError()
+  // Credential custody rules live in one place: see session-token.ts for why
+  // this reads the encrypted cookie via getToken() and not getServerSession().
+  const accessToken = await requireAccessToken()
 
   try {
     const response = await helmApiGet<TenantListResponse>({

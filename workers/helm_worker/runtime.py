@@ -44,24 +44,30 @@ class RunHandle:
         return self.interrupt_payload is not None
 
 
-class AnalystRuntime:
-    """Drives Analyst runs against a durable checkpoint store."""
+class AgentRuntime:
+    """Drives one agent's runs against a durable checkpoint store.
 
-    def __init__(self, *, gateway: GatewayClient, checkpointer: AsyncSqliteSaver) -> None:
+    Agent-agnostic: the graph defines the work, this class only starts,
+    inspects and resumes it. Every agent's runtime shares one checkpointer, so
+    all runs live in the same store and a run id alone finds its history.
+    """
+
+    def __init__(self, *, graph: Any, checkpointer: AsyncSqliteSaver, prefix: str) -> None:
         # Both are injected and held for the runtime's lifetime. In particular
         # the checkpointer is never constructed here — per-invocation
         # construction is the failure this design exists to prevent.
-        self._graph = build_analyst_graph(gateway).compile(checkpointer=checkpointer)
+        self._graph = graph.compile(checkpointer=checkpointer)
         self._checkpointer = checkpointer
+        # The prefix rides inside the run id ("mb-<uuid>"), so a bare id names
+        # its agent and `decide` can route without a lookup table on disk.
+        self._prefix = prefix
 
-    async def start(self, question: str, *, run_id: str | None = None) -> RunHandle:
+    async def start_with(self, initial: dict[str, Any], *, run_id: str | None = None) -> RunHandle:
         """Run until the agent pauses for a decision, or finishes."""
 
-        identifier = run_id or str(uuid4())
+        identifier = run_id or f"{self._prefix}-{uuid4()}"
         config = self._config(identifier)
-        initial: AnalystState = {"question": question, "run_id": identifier, "model_calls": 0}
-
-        await self._graph.ainvoke(initial, config=config)
+        await self._graph.ainvoke({**initial, "run_id": identifier, "model_calls": 0}, config=config)
         return await self.inspect(identifier)
 
     async def inspect(self, run_id: str) -> RunHandle:
@@ -109,6 +115,17 @@ class AnalystRuntime:
         # LangChain's chains, agents and abstractions, and this is a typed dict
         # for the config LangGraph itself requires.
         return {"configurable": {"thread_id": run_id}}
+
+
+class AnalystRuntime(AgentRuntime):
+    """The Analyst's runtime, keeping its question-first calling convention."""
+
+    def __init__(self, *, gateway: GatewayClient, checkpointer: AsyncSqliteSaver) -> None:
+        super().__init__(graph=build_analyst_graph(gateway), checkpointer=checkpointer, prefix="an")
+
+    async def start(self, question: str, *, run_id: str | None = None) -> RunHandle:
+        initial: AnalystState = {"question": question}
+        return await self.start_with(dict(initial), run_id=run_id)
 
 
 def _interrupt_payload(snapshot: Any) -> dict[str, Any] | None:

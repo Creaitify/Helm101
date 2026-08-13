@@ -90,6 +90,30 @@ ROUTING_TABLE: dict[TaskKind, TaskPolicy] = {
         timeout_seconds=30.0,
         allowed_data_classes=_PLATFORM_DOCS,
     ),
+    # The agent tasks. All three reason over sample campaign data or briefs —
+    # nothing tenant-personal — so they stay inside the platform_docs class
+    # until the data-classification decision widens it.
+    TaskKind.MEDIA_BUYER_PROPOSAL: TaskPolicy(
+        model=ModelRef(provider=ANTHROPIC, model="claude-opus-5"),
+        default_effort=Effort.HIGH,
+        default_max_tokens=4_096,
+        timeout_seconds=120.0,
+        allowed_data_classes=_PLATFORM_DOCS,
+    ),
+    TaskKind.CREATIVE_VARIANTS: TaskPolicy(
+        model=ModelRef(provider=ANTHROPIC, model="claude-opus-5"),
+        default_effort=Effort.HIGH,
+        default_max_tokens=4_096,
+        timeout_seconds=120.0,
+        allowed_data_classes=_PLATFORM_DOCS,
+    ),
+    TaskKind.GOVERNOR_PLAN: TaskPolicy(
+        model=ModelRef(provider=ANTHROPIC, model="claude-opus-5"),
+        default_effort=Effort.HIGH,
+        default_max_tokens=4_096,
+        timeout_seconds=120.0,
+        allowed_data_classes=_PLATFORM_DOCS,
+    ),
 }
 
 

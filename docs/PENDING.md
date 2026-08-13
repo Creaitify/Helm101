@@ -52,23 +52,23 @@ and all of `api/` except one empty package and path references.
 
 ## What is verified running locally
 
-Re-run on 2026-08-11 after the cleanup:
+Re-run on 2026-08-12 after the Workspace cutover:
 
 | Gate | Result |
 |---|---|
-| `web` vitest | 207 passed / 43 files |
-| `web` `tsc --noEmit`, ESLint, `next build` | clean |
-| `api` pytest (no Docker) | 139 passed, 29 skipped (all Docker/DB-gated) |
+| `web` vitest | 238 passed / 46 files |
+| `web` `tsc --noEmit`, ESLint, `next build` (19 routes + proxy) | clean |
+| `api` pytest (no Docker) | 222 passed, 29 skipped (all Docker/DB-gated) |
 | `api` integration runner | not re-run this session (Docker unavailable); last full run 2026-08-09: 168 passed, 0 skipped |
-
-The vitest delta from the previous record (317/53) is the deleted Phase A test
-files plus the new seam tests (`shell-data`, `data-demo`, `app-layout`, and
-rewritten `tenant-directory`/`tenant-switch-route`/`approvals-action`/
-`role-mapping`).
+| Zero-setup demo | verified in a real browser: empty `.env.local`, `npm run dev`, every surface renders — no login wall |
+| `POST /api/v1/workspace/questions` | verified against a running keyless API (replay adapter): wire shape matches the web client, `grounded:false` honestly reported |
 
 Both services start and serve **without** any Auth0 or database credential —
-`web` renders every surface in demo mode. Credentials unlock sign-in and real
-tenant data, not the ability to run the platform.
+`web` renders every surface in demo mode, and as of 2026-08-12 that claim is
+actually true (see below): the route-protection proxy waves demo requests
+through instead of dead-ending them at a login page with zero providers.
+Credentials unlock sign-in and real tenant data, not the ability to run the
+platform.
 
 ---
 
@@ -196,10 +196,65 @@ disk, and a **separate process** resumed it, executed once, and did not call the
 model again. Workers hold no provider key and no database driver — an AST scan
 over every module and a startup guard enforce that rather than documenting it.
 
-Not yet built, and deliberately not claimed: the **Workspace UI wiring** (the
-Analyst is reachable from the CLI and the API, not the browser), the **Postgres
-queue** with leases and a DLQ, and **agent-run/approval API endpoints** — runs
-are started from the CLI, not claimed from a queue.
+Not yet built, and deliberately not claimed: the **Postgres queue** with
+leases and a DLQ, and **agent-run/approval API endpoints** — runs are started
+from the CLI, not claimed from a queue. The Workspace UI wiring landed later
+the same day — see the next section.
+
+---
+
+## Landed 2026-08-12 (second slice) — the Analyst in the browser, and a truthful demo
+
+Three changes, all in `web/`, none touching the auth spine's verification chain:
+
+**Workspace is wired to the real Analyst.** `WorkspaceView`'s hardcoded
+`cannedReply` is no longer the live path. A server action
+(`app/(app)/workspace/actions.ts`) routes the question through the real
+boundary — `helmApiPost` → `POST /api/v1/workspace/questions` → gateway →
+citation verification — and returns a closed set of typed results. Gateway
+problem codes keep their identity end to end: the UI says "budget exhausted"
+or "kill switch engaged", never "something went wrong". A live answer renders
+only citations that survived verification, an ungrounded answer is labelled
+ungrounded in the thread, and a live reply never claims a fabricated model
+attribution (the `HELM · GPT:` prefix is demo-only). Demo mode still answers
+from the canned reply, so the zero-credential checkout keeps working. New
+seams: `lib/server/session-token.ts` (single home for access-token custody,
+now shared with `tenant-directory.ts`), `lib/server/workspace-analyst.ts`
+(the only file that knows the endpoint's wire shape), and `helmApiPost` with
+a 60s generation deadline (a longer deadline, never no deadline).
+
+**The zero-setup demo claim is now true** (audit P1 #9). `proxy.ts` bypasses
+`withAuth` entirely in demo mode — with an empty env there is no `AUTH_SECRET`
+and withAuth answers every request with a NO_SECRET error page before
+consulting any callback, so the only working gate is not calling it. Live mode
+hands the request to withAuth untouched, and an explicit
+`HELM_DEMO_MODE=false` restores the login wall even with no API configured.
+`isDemoMode` moved to `lib/demo-mode.ts` (the proxy bundle cannot import
+through `server-only`); `lib/server/env.ts` re-exports it, so every existing
+import path still works.
+
+**Every shell render now states its data provenance.** A banner above the top
+bar says, in demo mode, that all data is synthetic — and in live mode, that
+campaigns/approvals/analytics are sample data until Phase 2 lands while
+Workspace chat is live. Rendered by the shell so no surface can forget it.
+
+Honest limitations, unchanged by this slice:
+
+- The **live** Workspace path still requires Auth0 sign-in, which is blocked
+  on the same dashboard step as everything else ("The one thing blocking live
+  sign-in" above). The live seam is covered by unit tests and by exercising
+  the API endpoint directly; the full browser round-trip through Auth0 has
+  not been demonstrated yet.
+  - *Amendment (2026-08-13):* `ALLOW_LOCAL_ANALYST=true` in `web/.env.local`
+    (the web counterpart of the API's `ALLOW_LOCAL_PRINCIPAL`, refused in
+    staging/production) now lets the browser reach the real Analyst without a
+    session. Verified in a real browser against a live provider: grounded
+    answer with 12 verified citation chips, and an off-topic greeting
+    correctly labelled ungrounded. What remains undemonstrated is only the
+    Auth0 round-trip itself.
+- Every other surface still serves fixtures in both modes; the banner labels
+  it, Phase 2 fixes it.
+- Approvals' approve/reject remains a validated no-op acknowledgment.
 
 ---
 
@@ -244,7 +299,7 @@ LLM observability.
 | **Async spine** (queue, outbox, workers, DLQ) | Phase 5; open decision #3 |
 | **Image and video generation** | Needs the async spine + R2. #10 |
 | **LangGraph agent runtime** | Phase 6. #6 |
-| **Embedded LLM workspace** | Needs streaming through FastAPI + conversation persistence |
+| **Embedded LLM workspace** | ⚠️ partial 2026-08-12: the Workspace surface asks the real Analyst synchronously. Still deferred: streaming through FastAPI, conversation persistence, tenant-scoped grounding |
 | **Invitation lifecycle** | #8. `app.cli.provision` is the only entry path |
 | **Vault/KMS** | #4. Provider keys stay in env vars behind a single accessor |
 | **Refresh-token rotation** | Needs Vault/KMS first. Auth0 access tokens last 24h; a stale one surfaces as a clean 401 |
@@ -302,7 +357,8 @@ LLM observability.
 
 - Approvals: real Edit affordance (open payload in a SlideOver before approve).
 - Studio: acknowledge-to-ship for SEBI-flagged variants.
-- Workspace: token-by-token reply reveal; file-attach chip.
+- ~~Workspace: token-by-token reply reveal; file-attach chip~~ — both exist
+  (reveal since the mockup port; kept through the 2026-08-12 live cutover).
 - Campaigns: sortable columns; wire the drawer chart to `detail.series`.
 - Analytics: move inline presentational datasets (heatmap seed, gauge targets,
   leaderboard rows) into `lib/data`.

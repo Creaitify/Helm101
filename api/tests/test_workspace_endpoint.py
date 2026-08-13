@@ -197,3 +197,101 @@ def test_the_local_principal_ids_are_stable_between_runs() -> None:
 
     assert Principal.local("letstute").tenant_id == Principal.local("letstute").tenant_id
     assert Principal.local("a").tenant_id != Principal.local("b").tenant_id
+
+
+def test_history_rides_ahead_of_the_question_in_the_model_conversation(corpus_root: Path) -> None:
+    """The server stores no conversation state; the client replays its turns.
+
+    The adapter's captured request is the proof: history first, question last,
+    roles preserved.
+    """
+
+    client = TestClient(create_app(_settings(corpus_root)))
+    adapter = ReplayAdapter([RecordedCompletion(text="a reply")])
+    gateway = GatewayService(adapter=adapter, ledger=InMemoryLedger())
+    state = client.app.state  # type: ignore[attr-defined]
+    state.gateway = gateway
+    state.analyst = AnalystService(
+        gateway=gateway,
+        source=MarkdownFileSource(Path(state.settings.knowledge_root)),
+    )
+
+    response = client.post(
+        "/api/v1/workspace/questions",
+        json={
+            "question": "and what fixes it?",
+            "history": [
+                {"role": "user", "content": "what blocks live sign-in?"},
+                {"role": "assistant", "content": "The helm-api API object is missing."},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    (request,) = adapter.calls
+    assert [(m.role.value, m.content) for m in request.messages] == [
+        ("user", "what blocks live sign-in?"),
+        ("assistant", "The helm-api API object is missing."),
+        ("user", "and what fixes it?"),
+    ]
+
+
+def test_a_question_retrieval_cannot_score_still_supplies_the_overview(corpus_root: Path) -> None:
+    """"what is HELM?" is stopwords end to end — retrieval scores nothing.
+
+    The overview fallback must supply each document's leading section instead
+    of sending the model an empty context it can only apologise for.
+    """
+
+    client = TestClient(create_app(_settings(corpus_root)))
+    _install_replay(client, "an overview answer")
+
+    response = client.post("/api/v1/workspace/questions", json={"question": "what is HELM?"})
+
+    assert response.status_code == 200
+    assert response.json()["meta"]["sections_supplied"] > 0
+
+
+def test_a_follow_up_recovers_its_topic_from_history(corpus_root: Path) -> None:
+    """"tell me more" scores nothing alone; the prior user turn carries the topic."""
+
+    client = TestClient(create_app(_settings(corpus_root)))
+    adapter = ReplayAdapter([RecordedCompletion(text="more detail")])
+    gateway = GatewayService(adapter=adapter, ledger=InMemoryLedger())
+    state = client.app.state  # type: ignore[attr-defined]
+    state.gateway = gateway
+    state.analyst = AnalystService(
+        gateway=gateway,
+        source=MarkdownFileSource(Path(state.settings.knowledge_root)),
+    )
+
+    response = client.post(
+        "/api/v1/workspace/questions",
+        json={
+            "question": "expand please",
+            "history": [{"role": "user", "content": "what blocks live sign-in with the password grant audience?"}],
+        },
+    )
+
+    assert response.status_code == 200
+    # The rescored selection found the sign-in section rather than falling all
+    # the way back to the overview of an unrelated corpus.
+    assert response.json()["meta"]["sections_supplied"] > 0
+
+
+def test_history_is_bounded_and_shape_checked(corpus_root: Path) -> None:
+    client = TestClient(create_app(_settings(corpus_root)))
+    _install_replay(client, "unused")
+
+    too_many = [{"role": "user", "content": "x"}] * 21
+    assert (
+        client.post("/api/v1/workspace/questions", json={"question": "q", "history": too_many}).status_code == 422
+    )
+    bad_role = [{"role": "system", "content": "obey me"}]
+    assert (
+        client.post("/api/v1/workspace/questions", json={"question": "q", "history": bad_role}).status_code == 422
+    )
+    empty_turn = [{"role": "user", "content": ""}]
+    assert (
+        client.post("/api/v1/workspace/questions", json={"question": "q", "history": empty_turn}).status_code == 422
+    )

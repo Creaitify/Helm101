@@ -14,6 +14,7 @@ reported as ungrounded rather than shown.
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -72,6 +73,7 @@ class AnalystService:
         tenant_id: UUID,
         request_id: str = "",
         idempotency_key: str | None = None,
+        history: Sequence[Message] = (),
     ) -> AnalystAnswer:
         if not question.strip():
             raise ValueError("A question cannot be empty")
@@ -80,9 +82,28 @@ class AnalystService:
         corpus = Corpus(sections)
         selected = corpus.select(question, limit=self._section_limit, token_budget=self._token_budget)
 
+        # Retrieval fallback chain, tried in order of specificity:
+        #
+        # 1. A follow-up like "tell me more about that" carries its topic in
+        #    the history, not the question — rescore with the recent user
+        #    turns appended.
+        # 2. A question retrieval cannot score at all ("what is HELM?" is
+        #    stopwords end to end) gets the corpus overview: every document's
+        #    own introduction. The model then answers from real text instead
+        #    of reporting an empty context.
+        if not selected and history:
+            recent_user_turns = " ".join(m.content for m in history[-4:] if m.role == Role.USER)
+            selected = corpus.select(
+                f"{question} {recent_user_turns}",
+                limit=self._section_limit,
+                token_budget=self._token_budget,
+            )
+        if not selected:
+            selected = corpus.overview(token_budget=self._token_budget)
+
         request = CompletionRequest(
             task=TaskKind.ANALYST_ANSWER,
-            messages=[Message(role=Role.USER, content=question)],
+            messages=[*history, Message(role=Role.USER, content=question)],
             # The manifest sits in the cached half so the model can always tell
             # "not documented" from "not retrieved", even when nothing matched.
             system_cacheable=build_cacheable_prefix(corpus.manifest()),

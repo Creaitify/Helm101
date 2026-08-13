@@ -141,6 +141,35 @@ class Corpus:
 
         return selected
 
+    def overview(self, *, token_budget: int = 6_000) -> list[Section]:
+        """The leading section of every document, in corpus order.
+
+        The fallback for questions retrieval cannot score: "what is HELM?"
+        tokenizes to nothing (every word, including "helm", is a stopword in a
+        corpus that is entirely about HELM), so `search` correctly returns
+        nothing — and the model, correctly but unhelpfully, reports that no
+        documents were supplied. A document's first section is its own
+        introduction, so the set of first sections is the closest thing the
+        corpus has to an answer to "describe this platform".
+
+        Budget rules match `select`: a section that does not fit is skipped
+        whole rather than truncated, or its citations could not verify.
+        """
+
+        selected: list[Section] = []
+        remaining = token_budget * _CHARS_PER_TOKEN
+        current_doc = ""
+        for section in self._sections:
+            if section.doc == current_doc:
+                continue
+            current_doc = section.doc
+            cost = len(section.text)
+            if cost > remaining:
+                continue
+            selected.append(section)
+            remaining -= cost
+        return selected
+
     def manifest(self) -> str:
         """Every heading in the corpus, grouped by document.
 
