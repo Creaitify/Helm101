@@ -1,5 +1,6 @@
 import { AgentCard } from '@/components/viz/AgentCard'
 import { getAgents } from '@/lib/data'
+import { AgentConsole } from './AgentConsole'
 
 export default async function AgentsPage() {
   const agents = await getAgents()
@@ -11,7 +12,7 @@ export default async function AgentsPage() {
           <h1>
             Agent Fleet <span className="tag">MASTER CONSOLE</span>
           </h1>
-          <p>8 specialists · supervised by Governor · LangGraph durable runtime</p>
+          <p>4 connected capabilities · supervised by Governor · gateway-routed runtime</p>
         </div>
         <span className="pill v">checkpointer healthy</span>
       </div>
@@ -32,6 +33,7 @@ export default async function AgentsPage() {
           <AgentCard key={agent.code} agent={agent} />
         ))}
       </div>
+      <AgentConsole />
     </div>
   )
 }

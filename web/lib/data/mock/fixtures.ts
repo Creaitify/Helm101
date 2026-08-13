@@ -114,23 +114,19 @@ export const channels: ChannelRow[] = [
 
 export const activity: ActivityEvent[] = [
   { agent: 'Media Buyer', title: 'Budget shift', sub: '₹4K → Retargeting · r_8a3f12', dot: 'emerald', latency: '340ms', tokens: '2.1k tok' },
-  { agent: 'Compliance', title: 'Compliance flag', sub: 'ad copy V-13 · guaranteed-return', dot: 'amber', latency: '892ms', tokens: '1.4k tok', tag: 'REVIEW' },
-  { agent: 'Reply Router', title: '12 drafts', sub: 'WhatsApp inbound · l_8a3ed1', dot: 'violet', latency: '1.1s', tokens: '8.0k tok' },
+  { agent: 'Creative', title: 'Compliance flag', sub: 'ad copy V-13 · guaranteed-return', dot: 'amber', latency: '892ms', tokens: '1.4k tok', tag: 'REVIEW' },
+  { agent: 'Governor', title: 'Delegation plan', sub: 'campaign optimization · 3 steps', dot: 'violet', latency: '1.1s', tokens: '8.0k tok' },
   { agent: 'Creative', title: 'Shipped V-14', sub: 'Meta · reel 18s', dot: 'emerald', latency: '1.4s', tokens: '18.9k' },
-  { agent: 'Audience', title: 'Sync', sub: 'WhatsApp BSP degraded', dot: 'rose', latency: '3.2s', tokens: '640', tag: 'ERR' },
+  { agent: 'Media Buyer', title: 'Policy check', sub: 'WhatsApp BSP degraded', dot: 'rose', latency: '3.2s', tokens: '640', tag: 'ERR' },
   { agent: 'Analyst', title: 'Daily readout', sub: 'attribution rebuilt', dot: 'emerald', latency: '720ms', tokens: '7.2k' },
-  { agent: 'Nurture', title: '88 reminders', sub: 'abandoned checkout', dot: 'emerald', latency: '410ms', tokens: '2.0k' },
+  { agent: 'Analyst', title: '88 reminders', sub: 'abandoned checkout readout', dot: 'emerald', latency: '410ms', tokens: '2.0k' },
 ]
 
 export const agents: Agent[] = [
   { code: 'GV', name: 'Governor', role: 'supervisor', tier: 'human', runs: '214', success: '99.1%', tokens: '1.2M', cost: '$18.40', enabled: true, grad: ['violet', 'sky'] },
   { code: 'MB', name: 'Media Buyer', role: 'budget/bid', tier: 'propose', runs: '88', success: '96.4%', tokens: '640K', cost: '$9.20', enabled: true, grad: ['sky', 'violet'] },
   { code: 'AN', name: 'Analyst', role: 'attribution', tier: 'auto', runs: '312', success: '99.6%', tokens: '890K', cost: '$11.80', enabled: true, grad: ['emerald', 'sky'] },
-  { code: 'RR', name: 'Reply Router', role: 'inbound', tier: 'auto', runs: '1.4K', success: '94.2%', tokens: '2.1M', cost: '$6.40', enabled: true, grad: ['violet', 'rose'] },
-  { code: 'AU', name: 'Audience', role: 'segments', tier: 'propose', runs: '46', success: '97.8%', tokens: '410K', cost: '$5.90', enabled: true, grad: ['amber', 'rose'] },
-  { code: 'NU', name: 'Nurture', role: 'retargeting', tier: 'auto', runs: '520', success: '98.1%', tokens: '720K', cost: '$8.10', enabled: true, grad: ['emerald', 'violet'] },
-  { code: 'CR', name: 'Creative', role: 'generation', tier: 'propose', runs: '72', success: '91.0%', tokens: '1.5M', cost: '$34.20', enabled: true, grad: ['rose', 'violet'] },
-  { code: 'CO', name: 'Compliance', role: 'SEBI veto', tier: 'human', runs: '7', success: '100%', tokens: '380K', cost: '$4.10', enabled: true, grad: ['rose', 'amber'] },
+  { code: 'CR', name: 'Creative', role: 'generation + compliance gate', tier: 'propose', runs: '72', success: '91.0%', tokens: '1.5M', cost: '$34.20', enabled: true, grad: ['rose', 'violet'] },
 ]
 
 export const gatewayBudgets: GatewayBudget[] = [
@@ -261,7 +257,7 @@ export const promptTemplates: PromptTemplate[] = [
 export const approvals: ApprovalItem[] = [
   { id: 'a1', agent: 'Media Buyer', agentCode: 'MB', action: 'Budget shift', summary: '+₹15K to Lookalike 2%', payload: 'Move ₹15,000/day from FHC · Prospecting (CAC ₹612) to FHC · Lookalike 2% (CAC ₹455).', proposedAt: '14:02', checks: [{ label: 'Within daily cap', status: 'pass' }, { label: 'CAC guardrail', status: 'pass' }, { label: 'Pacing > 90%', status: 'warn' }] },
   { id: 'a2', agent: 'Creative', agentCode: 'CR', action: 'Ship creative', summary: 'Ship 4 new reels', payload: 'Publish 4 reel variants (V-14…V-17) to Reels · Awareness. All passed the SEBI compliance gate.', proposedAt: '13:30', checks: [{ label: 'SEBI compliance', status: 'pass' }, { label: 'Brand lock', status: 'pass' }] },
-  { id: 'a3', agent: 'Audience', agentCode: 'AU', action: 'Suppression list', summary: 'New suppression list', payload: 'Suppress 1,240 contacts who opted out in the last 24h across Meta + WhatsApp.', proposedAt: '11:15', checks: [{ label: 'Consent / DPDP', status: 'pass' }, { label: 'Hashed PII only', status: 'pass' }] },
+  { id: 'a3', agent: 'Governor', agentCode: 'GV', action: 'Delegation plan', summary: 'Run campaign optimization plan', payload: 'Delegate analysis, budget proposal, and creative drafting. Each child keeps its own approval gate.', proposedAt: '11:15', checks: [{ label: 'Known agents only', status: 'pass' }, { label: 'Child gates preserved', status: 'pass' }] },
 ]
 export const integrationsFull: IntegrationDetail[] = [
   { id: 'i1', name: 'Meta Ads', auth: 'OAuth 2.1', status: 'healthy', scopes: ['ads_read', 'ads_management'], lastSync: '2m ago', calls: '3,412', grad: ['violet', 'sky'] },

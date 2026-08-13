@@ -9,7 +9,7 @@ describe('mock data', () => {
     const checkupStage = funnel.find(f => f.label === 'Checkups')!
     expect(channelTotal).toBe(checkupStage.value)
   })
-  it('exposes all 8 agents', async () => {
-    expect((await data.getAgents()).length).toBe(8)
+  it('exposes the implemented worker capabilities', async () => {
+    expect((await data.getAgents()).map((agent) => agent.name)).toEqual(['Governor', 'Media Buyer', 'Analyst', 'Creative'])
   })
 })
