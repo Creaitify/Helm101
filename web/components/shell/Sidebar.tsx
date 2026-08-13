@@ -105,12 +105,13 @@ export function Sidebar({
               onClick={onNavigate}
               className={pathname === href ? 'active' : undefined}
               aria-label={it.label}
+              title={it.desc}
             >
               <Icon />
               <span className="nav-label">{it.label}</span>
               {badge ? <span className="badge">{badge}</span> : null}
 
-              {/* Interactive Tooltip on Hover */}
+              {/* Interactive Tooltip on Hover (Collapsed Rail Only) */}
               <div className="nav-hovercard" role="tooltip">
                 <div className="nav-hovercard-desc">{it.desc}</div>
                 {badge ? (
@@ -136,12 +137,13 @@ export function Sidebar({
                   onClick={onNavigate}
                   className={pathname === href ? 'active' : undefined}
                   aria-label={it.label}
+                  title={it.desc}
                 >
                   <Icon />
                   <span className="nav-label">{it.label}</span>
                   {it.badge != null && <span className="badge">{it.badge}</span>}
 
-                  {/* Interactive Tooltip on Hover */}
+                  {/* Interactive Tooltip on Hover (Collapsed Rail Only) */}
                   <div className="nav-hovercard" role="tooltip">
                     <div className="nav-hovercard-desc">{it.desc}</div>
                   </div>
