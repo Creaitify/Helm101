@@ -23,7 +23,54 @@ const VALID_ID = /^[A-Za-z0-9_-]{1,128}$/
  * than fabricating fixture data -- a probing client must get a genuine "not
  * found", not a populated 200 for any id it tries.
  */
+import { getLatestShifts, listRunsByAgent, getRun } from '@/lib/server/runs-store'
+import type { CreativeAsset, SeriesColor } from '@/lib/types'
+
 export async function fetchCampaignDetail(id: string): Promise<CampaignDetail | null> {
   if (typeof id !== 'string' || !VALID_ID.test(id)) return null
-  return getCampaignDetail(id)
+  const detail = await getCampaignDetail(id)
+  if (!detail) return null
+
+  // Merge locally shipped creative variants for this campaign
+  try {
+    const shippedRuns = listRunsByAgent('creative', 20)
+    const extraCreatives: CreativeAsset[] = []
+    for (const run of shippedRuns) {
+      if (run.runId.startsWith('ship-')) {
+        const full = getRun(run.runId)
+        if (full) {
+          const state = JSON.parse(full.stateJson)
+          if (state.action === 'ship_variant' && (!state.target_campaign || state.target_campaign === id)) {
+            const v = state.variant
+            extraCreatives.push({
+              id: v.id || run.runId,
+              kind: v.kind || 'copy',
+              label: v.headline || 'Studio Variant',
+              status: 'live',
+              grad: v.grad || (['violet', 'sky'] as [SeriesColor, SeriesColor]),
+            })
+          }
+        }
+      }
+    }
+    if (extraCreatives.length > 0) {
+      return {
+        ...detail,
+        creatives: [...extraCreatives, ...detail.creatives],
+      }
+    }
+  } catch {}
+
+  return detail
+}
+
+/** Fetch the latest approved/pending budget shifts from the agent runs store. */
+export async function getRecentBudgetShifts(): Promise<
+  Array<{ runId: string; shifts: any[]; updatedAt: string }>
+> {
+  try {
+    return getLatestShifts(5)
+  } catch {
+    return []
+  }
 }

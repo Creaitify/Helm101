@@ -1,8 +1,8 @@
 'use client'
-import { useState, useMemo, useRef } from 'react'
+import { useState, useMemo, useRef, useEffect } from 'react'
 import Link from 'next/link'
 import type { CampaignFull, CampaignDetail } from '@/lib/types'
-import { fetchCampaignDetail } from './actions'
+import { fetchCampaignDetail, getRecentBudgetShifts } from './actions'
 import { Card } from '@/components/ui/Card'
 import { StatusPill } from '@/components/ui/StatusPill'
 import { SlideOver } from '@/components/ui/SlideOver'
@@ -15,8 +15,20 @@ export function CampaignsView({ campaigns }: { campaigns: CampaignFull[] }) {
   const [status, setStatus] = useState('all')
   const [detail, setDetail] = useState<CampaignDetail | null>(null)
   const [open, setOpen] = useState(false)
+  const [recentShifts, setRecentShifts] = useState<Array<{ runId: string; shifts: any[]; updatedAt: string }>>([])
   const requestedId = useRef<string | null>(null) // MINOR E: ignore a response that is no longer the latest request
   const [sort, setSort] = useState<{ key: 'name' | 'channel' | 'status' | 'spend' | 'pacingPct' | 'cac' | 'roas'; direction: 'asc' | 'desc' }>({ key: 'spend', direction: 'desc' })
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const shifts = await getRecentBudgetShifts()
+        if (Array.isArray(shifts) && shifts.length > 0) {
+          setRecentShifts(shifts)
+        }
+      } catch {}
+    })()
+  }, [])
 
   const rows = useMemo(() => [...campaigns.filter((c) =>
     (status === 'all' || c.status === status) && c.name.toLowerCase().includes(q.toLowerCase())
@@ -51,6 +63,29 @@ export function CampaignsView({ campaigns }: { campaigns: CampaignFull[] }) {
       <div className="phead">
         <div><h1>Campaigns</h1><p>{campaigns.length} campaigns across Meta, Google, WhatsApp &amp; Email</p></div>
       </div>
+
+      {recentShifts.length > 0 && (
+        <Card style={{ marginBottom: 16, borderLeft: '3px solid var(--violet)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600 }}>
+              <span style={{ color: 'var(--violet)' }}>⚡ Autonomous Budget Reallocations</span>
+              <span className="pill" style={{ fontSize: 11 }}>Run #{recentShifts[0].runId}</span>
+            </div>
+            <Link href="/approvals" style={{ fontSize: 12, color: 'var(--dim)', textDecoration: 'none' }}>
+              View in Approvals →
+            </Link>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+            {recentShifts[0].shifts.slice(0, 3).map((s: any, i: number) => (
+              <div key={i} style={{ fontSize: 12, padding: '6px 10px', background: 'var(--panel-bg, rgba(255,255,255,0.03))', borderRadius: 6 }}>
+                <span style={{ fontWeight: 500 }}>{s.campaign_id}</span>:{' '}
+                <span style={{ color: 'var(--dim)' }}>{inr(s.current_budget || 0)}</span> →{' '}
+                <span style={{ color: 'var(--emerald, #10b981)', fontWeight: 600 }}>{inr(s.proposed_budget || 0)}</span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
       <Card>
         <FilterBar>
           <SearchInput value={q} onChange={setQ} placeholder="Search campaigns…" />

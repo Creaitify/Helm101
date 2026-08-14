@@ -80,18 +80,19 @@ def build_creative_graph(gateway: GatewayClient) -> StateGraph[CreativeState, No
 
         if not variants:
             brief = state.get("brief", "Financial Health Checkup")
+            short_brief = brief[:50].strip()
             variants = [
                 {
-                    "headline": "Complete Financial Health Checkup",
-                    "body": f"Get an unbiased 360° portfolio review for ₹999. Backed by certified SEBI planners. Zero hidden commissions.",
+                    "headline": "Benefit-Led: 360° Portfolio Audit",
+                    "body": f"Get an unbiased review for {short_brief}. Certified SEBI planners, ₹999 flat fee, zero product commissions.",
                 },
                 {
-                    "headline": "Transparent Financial Roadmap",
-                    "body": "Understand your wealth, investments, and tax profile with clear, fee-only advisory from registered planners.",
+                    "headline": "Curiosity-Led: Identify Asset Leaks",
+                    "body": f"Discover wealth blind spots and tax optimization gaps in your {short_brief}. Fee-only transparent roadmap.",
                 },
                 {
-                    "headline": "Protect & Grow Family Assets",
-                    "body": "Objective financial assessment designed to optimize your portfolio and plan your family's future with certified experts.",
+                    "headline": "Urgency-Led: Limited Planning Slots",
+                    "body": f"Reserve your ₹999 {short_brief} slot today. Objective family wealth roadmaps from registered advisors.",
                 },
             ]
 

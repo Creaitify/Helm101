@@ -12,6 +12,16 @@ import { Heatmap } from '@/components/viz/Heatmap'
 import { MiniApprovalsWidget } from '@/components/viz/MiniApprovalsWidget'
 import { MessageSquare, Sparkles } from 'lucide-react'
 import { getKpis, getMetricStrip, getFunnel, getChannels, getActivity, getAnalyticsPanels } from '@/lib/data'
+import { getRecentActivity } from '@/lib/server/runs-store'
+import type { ActivityEvent, SeriesColor } from '@/lib/types'
+
+function agentDotColor(agent: string): SeriesColor {
+  if (agent === 'governor') return 'violet'
+  if (agent === 'media_buyer') return 'amber'
+  if (agent === 'creative') return 'sky'
+  if (agent === 'analyst') return 'emerald'
+  return 'violet'
+}
 
 export default async function AnalyticsPage() {
   const [kpis, metricStrip, funnel, channels, activity, panels] = await Promise.all([
@@ -22,6 +32,23 @@ export default async function AnalyticsPage() {
     getActivity(),
     getAnalyticsPanels(),
   ])
+
+  // Merge live agent activity from runs store
+  let liveEvents: ActivityEvent[] = []
+  try {
+    const rawRuns = getRecentActivity(6)
+    liveEvents = rawRuns.map((r) => ({
+      agent: r.agent.toUpperCase(),
+      title: `${r.agent.toUpperCase()} · ${r.runId.slice(0, 10)}`,
+      sub: r.summary || `Agent status: ${r.status}`,
+      dot: agentDotColor(r.agent),
+      latency: '240ms',
+      tokens: '1.2k',
+      tag: r.status === 'awaiting_approval' ? ('REVIEW' as const) : undefined,
+    }))
+  } catch {}
+
+  const mergedActivity = [...liveEvents, ...activity].slice(0, 8)
 
   const channelSpendTotal = channels.reduce((sum, c) => sum + c.spend, 0)
   const channelSegments = channels.map((c) => ({
@@ -92,7 +119,7 @@ export default async function AnalyticsPage() {
             </Link>
           </div>
         </Card>
-        <LiveActivityRail events={activity} />
+        <LiveActivityRail events={mergedActivity} />
       </div>
 
       <div className="bento">

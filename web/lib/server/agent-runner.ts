@@ -1,6 +1,8 @@
 import { spawn } from 'child_process'
 import path from 'path'
 import fs from 'fs'
+import { saveRun, getRun, listPendingRuns } from './runs-store'
+import { AdPlatformRouter } from './ad-platforms'
 
 export interface AgentRunResult {
   ok: boolean
@@ -195,10 +197,29 @@ export function writeGovernorVariantsFile(items: any[]): void {
   } catch {}
 }
 
-function syncRunOutputs(result: AgentRunResult) {
+function syncRunOutputs(result: AgentRunResult, agent?: string, objective?: string) {
   if (!result.ok || !result.runId) return
 
-  // 1. If awaiting HITL approval, record to live-approvals.json
+  // Detect agent type from runId prefix if not provided
+  const agentType = agent || (
+    result.runId.startsWith('gv-') ? 'governor' :
+    result.runId.startsWith('mb-') ? 'media_buyer' :
+    result.runId.startsWith('cr-') ? 'creative' :
+    result.runId.startsWith('an-') ? 'analyst' : 'unknown'
+  )
+
+  // Persist to SQLite runs store
+  try {
+    saveRun(
+      result.runId,
+      agentType,
+      objective || result.state?.objective || result.state?.question || result.state?.brief || '',
+      result.status || 'running',
+      result.state || {},
+    )
+  } catch { /* runs store unavailable — continue with JSON fallback */ }
+
+  // 1. If awaiting HITL approval, record to live-approvals.json (backward compat)
   if (result.isAwaitingApproval || result.status === 'awaiting_approval') {
     const pendingItem: PendingApprovalItem = {
       runId: result.runId,
@@ -212,7 +233,7 @@ function syncRunOutputs(result: AgentRunResult) {
     writeLiveApprovalsFile([pendingItem, ...filtered])
   }
 
-  // 2. If creative deck or variants exist, record to governor-variants.json
+  // 2. If creative deck or variants exist, record to governor-variants.json (backward compat)
   const deck = result.state?.creative_deck
   const rawVariants = deck?.variants || result.state?.variants
   if (Array.isArray(rawVariants) && rawVariants.length > 0) {
@@ -631,7 +652,7 @@ export async function startAgentRun(
         interruptPayload: parsed.interrupt_payload,
         state: parsed.state,
       }
-      syncRunOutputs(res)
+      syncRunOutputs(res, agent, input)
       return res
     }
   } catch (err: any) {
@@ -643,7 +664,7 @@ export async function startAgentRun(
     ? simulateGovernorRun(input)
     : simulateSpecialistRun(agent, input)
 
-  syncRunOutputs(fallbackRes)
+  syncRunOutputs(fallbackRes, agent, input)
   return fallbackRes
 }
 
@@ -676,6 +697,7 @@ export async function decideAgentRun(
       const existing = readLiveApprovalsFile()
       writeLiveApprovalsFile(existing.filter((item) => item.runId !== runId))
 
+      // Persist decision to runs store
       syncRunOutputs(res)
       return res
     }
@@ -686,25 +708,50 @@ export async function decideAgentRun(
   const target = existing.find((item) => item.runId === runId)
   writeLiveApprovalsFile(existing.filter((item) => item.runId !== runId))
 
+  // Also check runs store if not found in JSON
+  let targetState = target?.state
+  if (!targetState) {
+    try {
+      const stored = getRun(runId)
+      if (stored) targetState = JSON.parse(stored.stateJson)
+    } catch {}
+  }
+
   const newStatus = decision === 'approved' ? 'completed' : 'rejected'
-  const executionLog = target?.state?.execution_log || []
+  const executionLog: string[] = Array.isArray(targetState?.execution_log || target?.state?.execution_log)
+    ? [...(targetState?.execution_log || target?.state?.execution_log)]
+    : []
+
   if (decision === 'approved') {
     executionLog.push(`Governor executed multi-agent relay for ${runId}:`)
     executionLog.push(`  [Creative] Approved deployment of copy variants.`)
     executionLog.push(`  [Media Buyer] Applied daily budget shifts under ±25% policy caps.`)
+
+    // Local dry-run dispatch via AdPlatformRouter
+    try {
+      const router = new AdPlatformRouter()
+      const resolvedState = targetState || target?.state || {}
+      const shifts = resolvedState.shifts || resolvedState.budget_proposal?.shifts || []
+      if (Array.isArray(shifts) && shifts.length > 0) {
+        const results = await router.executeApprovedShifts(shifts)
+        for (const res of results) {
+          executionLog.push(`  [Gateway Dispatch] ${res.platform.toUpperCase()}: ${res.action}`)
+        }
+      }
+    } catch {}
   } else {
     executionLog.push(`Governor relay ${runId} rejected by operator: ${reason || 'Manual rejection'}`)
   }
 
   const updatedState = {
-    ...(target?.state || {}),
+    ...(targetState || target?.state || {}),
     decision,
     decision_reason: reason,
     status: newStatus,
     execution_log: executionLog,
   }
 
-  return {
+  const decisionResult: AgentRunResult = {
     ok: true,
     runId,
     status: newStatus,
@@ -712,6 +759,8 @@ export async function decideAgentRun(
     interruptPayload: null,
     state: updatedState,
   }
+  syncRunOutputs(decisionResult)
+  return decisionResult
 }
 
 /**
@@ -736,6 +785,7 @@ export async function getAgentRunStatus(runId: string): Promise<AgentRunResult> 
     }
   } catch (err: any) {}
 
+  // Check JSON file fallback
   const existing = readLiveApprovalsFile()
   const found = existing.find((item) => item.runId === runId)
   if (found) {
@@ -748,6 +798,22 @@ export async function getAgentRunStatus(runId: string): Promise<AgentRunResult> 
       state: found.state,
     }
   }
+
+  // Check SQLite runs store
+  try {
+    const stored = getRun(runId)
+    if (stored) {
+      const state = JSON.parse(stored.stateJson)
+      return {
+        ok: true,
+        runId: stored.runId,
+        status: stored.status,
+        isAwaitingApproval: stored.status === 'awaiting_approval',
+        interruptPayload: state.proposal || null,
+        state,
+      }
+    }
+  } catch {}
 
   return {
     ok: true,
@@ -778,5 +844,30 @@ export async function listPendingApprovals(): Promise<PendingApprovalItem[]> {
     }
   } catch {}
 
-  return readLiveApprovalsFile()
+  // Merge JSON file and SQLite runs store
+  const fileItems = readLiveApprovalsFile()
+  try {
+    const storeItems = listPendingRuns()
+    const map = new Map<string, PendingApprovalItem>()
+    for (const item of fileItems) {
+      if (item.runId) map.set(item.runId, item)
+    }
+    for (const stored of storeItems) {
+      if (!map.has(stored.runId)) {
+        try {
+          const state = JSON.parse(stored.stateJson)
+          map.set(stored.runId, {
+            runId: stored.runId,
+            status: stored.status,
+            isAwaitingApproval: true,
+            interruptPayload: state.proposal || null,
+            state,
+          })
+        } catch {}
+      }
+    }
+    return Array.from(map.values())
+  } catch {
+    return fileItems
+  }
 }

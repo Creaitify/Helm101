@@ -368,7 +368,7 @@ def build_governor_graph(
                 idempotency_key=f"run:{run_id}:analyst",
             )
             findings = AnalystFindingsPayload(
-                summary=result.answer or "30-day performance audit confirms Meta Retargeting as the top converter (₹341 CAC, 3.4x ROAS, 346 checkups), while Search Competitor is fatigued (₹550 CAC). Recommended action: reallocate spend to social retargeting with fee-only transparency copy.",
+                summary=result.answer or "Audit confirms Meta Retargeting as top converter (₹341 CAC, 3.4x ROAS) vs fatigued Search Competitor (₹550 CAC). Reallocate spend into social retargeting with fee-only transparency copy.",
                 trends=[
                     {"metric": "Blended CAC", "value": "₹385", "direction": "improving (-12%)"},
                     {"metric": "Top Channel ROAS", "value": "3.4x", "direction": "peaking at 4.2x"},
@@ -392,8 +392,9 @@ def build_governor_graph(
             )
         except Exception as e:
             logger.warning("analyst.gateway_failed", error=str(e))
+            dir_analyst = state.get("plan", {}).get("directives", {}).get("analyst", "")
             findings = AnalystFindingsPayload(
-                summary="30-day performance audit confirms Meta Retargeting as the top converter (₹341 CAC, 3.4x ROAS, 346 checkups), while Search Competitor is fatigued (₹550 CAC). Recommended action: reallocate spend to social retargeting with fee-only transparency copy.",
+                summary=f"30D performance audit for '{objective[:60]}': Meta Retargeting leads at ₹341 CAC (3.4x ROAS) while Competitor Search shows fatigue at ₹550 CAC. Action: reallocate spend into high-intent social channels.",
                 trends=[
                     {"metric": "Blended CAC", "value": "₹385", "direction": "improving (-12%)"},
                     {"metric": "Top Channel ROAS", "value": "3.4x", "direction": "peaking at 4.2x"},
@@ -428,18 +429,19 @@ def build_governor_graph(
         framed_input = frame_as_data_block("creative_brief_input", brief_data, "Creative Brief from Governor")
         logger.info("creative.executing", run_id=run_id)
 
+        obj_text = state.get("objective", "")
         variants_raw = [
             {
-                "headline": "Complete Financial Health Checkup",
-                "body": "Get a comprehensive portfolio review and unbiased financial roadmap today for ₹999. Backed by certified SEBI advisors. Zero hidden commissions.",
+                "headline": "Benefit-Led: 360° Portfolio Audit",
+                "body": f"Get an unbiased review for {obj_text[:50].strip() or '₹999 Checkup'}. Certified SEBI planners, zero product commissions.",
             },
             {
-                "headline": "Transparent Financial Assessment",
-                "body": "Understand your wealth, investments, and tax profile with clear, fee-only advisory. Make informed decisions with registered planners.",
+                "headline": "Curiosity-Led: Identify Asset Leaks",
+                "body": "Discover wealth blind spots and tax optimization gaps in your portfolio. Transparent fee-only planning roadmap.",
             },
             {
-                "headline": "Protect & Grow Family Assets",
-                "body": "Objective financial assessment designed to optimize your portfolio and plan your family's future with SEBI-registered professionals.",
+                "headline": "Urgency-Led: Limited Planning Slots",
+                "body": "Reserve your ₹999 financial health audit today. Objective family wealth roadmap by registered advisors.",
             },
         ]
 
@@ -519,8 +521,8 @@ def build_governor_graph(
         # Policy Fallback Resilience: ensure at least one valid balanced shift exists
         if not shifts:
             fallback_shifts = [
-                {"campaign_id": "fhc-meta-retargeting", "proposed_budget": 50000, "reason": "High conversion velocity on ₹999 checkups"},
-                {"campaign_id": "search-competitor", "proposed_budget": 20000, "reason": "Shift underperforming budget to Meta retargeting"},
+                {"campaign_id": "fhc-meta-retargeting", "proposed_budget": 50000, "reason": "Scale top ROAS converter (3.4x ROAS)"},
+                {"campaign_id": "search-competitor", "proposed_budget": 20000, "reason": "Trim fatigued competitor search (₹550 CAC)"},
             ]
             policy_res = apply_policy(SAMPLE_CAMPAIGNS, fallback_shifts)
             shifts = [dict(s) for s in policy_res.shifts]
@@ -536,7 +538,7 @@ def build_governor_graph(
             shifts=shifts,
             total_reallocated_daily=total_moved,
             policy_checks=checks,
-            analysis="Rebalanced daily spend from fatigued non-brand search into high-ROAS Meta retargeting.",
+            analysis="Reallocated spend from fatigued search into high-ROAS Meta retargeting within ±25% policy caps.",
         )
 
         return {

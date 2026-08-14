@@ -3,7 +3,7 @@ import { useState, useRef, useEffect } from 'react'
 import Link from 'next/link'
 import type { Brief, Variant } from '@/lib/types'
 import { buildVariants } from '@/lib/studio'
-import { getGovernorVariantsAction } from './actions'
+import { getGovernorVariantsAction, generateLiveVariants, shipVariantToCampaign } from './actions'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { ShieldAlert, Sparkles, Check, Send, AlertTriangle, X } from 'lucide-react'
@@ -46,9 +46,31 @@ export function StudioView({ brief }: { brief: Brief }) {
     })()
   }, [])
 
-  function generate() {
+  async function generate() {
     setPhase('generating')
     setVariants([])
+
+    // Try live Creative agent first, fall back to local heuristics
+    try {
+      const liveVariants = await generateLiveVariants(
+        form.audience || 'Anxious Tech Professionals (28-38)',
+        form.hook || 'Fee-only transparency',
+        form.offer || '₹999 Financial Health Checkup',
+        (form.format as 'image' | 'video' | 'copy') || 'copy',
+      )
+      if (liveVariants.length > 0) {
+        setVariants(liveVariants)
+        setPhase('done')
+        toast({ title: '⚡ Agent Generated', description: `Creative agent produced ${liveVariants.length} SEBI-checked variants.` })
+
+        // Refresh Governor variants after generation
+        const list = await getGovernorVariantsAction()
+        if (Array.isArray(list) && list.length > 0) setGovernorVariants(list)
+        return
+      }
+    } catch {}
+
+    // Fallback: local heuristic generation
     timer.current = setTimeout(() => {
       setVariants(buildVariants(form))
       setPhase('done')
@@ -59,6 +81,7 @@ export function StudioView({ brief }: { brief: Brief }) {
     setShipped((s) => [...s, v])
     setVariants((vs) => vs.filter((x) => x.id !== v.id))
     setGovernorVariants((vs) => vs.filter((x) => x.id !== v.id))
+    void shipVariantToCampaign(v)
     toast(`Variant "${v.headline.substring(0, 24)}…" shipped to ad inventory`)
   }
 
@@ -67,6 +90,7 @@ export function StudioView({ brief }: { brief: Brief }) {
     if (ready.length === 0) return
     setShipped((s) => [...s, ...ready])
     setVariants((vs) => vs.filter((v) => !(v.compliance === 'pass' || acknowledged.has(v.id))))
+    ready.forEach((v) => void shipVariantToCampaign(v))
     toast(`Batch shipped ${ready.length} approved variant(s)`)
   }
 
