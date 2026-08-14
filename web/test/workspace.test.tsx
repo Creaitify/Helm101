@@ -4,8 +4,53 @@ import userEvent from '@testing-library/user-event'
 import { cannedReply } from '@/lib/workspace'
 import { promptTemplates } from '@/lib/data/mock/fixtures'
 
-const { askWorkspaceQuestion } = vi.hoisted(() => ({ askWorkspaceQuestion: vi.fn() }))
-vi.mock('@/app/(app)/workspace/actions', () => ({ askWorkspaceQuestion }))
+const {
+  askWorkspaceQuestion,
+  getWorkspaceThreadsAction,
+  getThreadDetailAction,
+  createThreadAction,
+  updateThreadAction,
+  deleteThreadAction,
+  saveMessageAction,
+} = vi.hoisted(() => ({
+  askWorkspaceQuestion: vi.fn(),
+  getWorkspaceThreadsAction: vi.fn().mockResolvedValue([]),
+  getThreadDetailAction: vi.fn().mockResolvedValue(null),
+  createThreadAction: vi.fn().mockImplementation((title: string, tag?: string) =>
+    Promise.resolve({
+      id: 't-test-1',
+      tenantId: 'letstute',
+      userId: 'user-1',
+      title,
+      tag,
+      isPinned: false,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      messages: [],
+    })
+  ),
+  updateThreadAction: vi.fn().mockResolvedValue(null),
+  deleteThreadAction: vi.fn().mockResolvedValue(true),
+  saveMessageAction: vi.fn().mockImplementation((threadId: string, role: string, content: string) =>
+    Promise.resolve({
+      id: 'm-test-1',
+      threadId,
+      role,
+      content,
+      createdAt: new Date().toISOString(),
+    })
+  ),
+}))
+
+vi.mock('@/app/(app)/workspace/actions', () => ({
+  askWorkspaceQuestion,
+  getWorkspaceThreadsAction,
+  getThreadDetailAction,
+  createThreadAction,
+  updateThreadAction,
+  deleteThreadAction,
+  saveMessageAction,
+}))
 
 import { WorkspaceView } from '@/app/(app)/workspace/WorkspaceView'
 

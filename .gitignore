@@ -6,9 +6,21 @@ node_modules/
 dist/
 out/
 
-# screenshot artifacts
+# screenshot & demo artifacts
 screenshots/
 scratch/
-verify_*.mjs
-web/verify_*.mjs
+demo/
+demo-*.ts
+demo-*.mjs
+demo-*.js
+test-results/
+playwright-report/
+.helm/
+api/.helm/
+.helm-worker/
+workers/.helm-worker/
+*.sqlite
+*.sqlite3
+*.pyc
+__pycache__/
 

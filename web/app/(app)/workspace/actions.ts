@@ -106,3 +106,47 @@ export async function askWorkspaceQuestion(
     return { ok: false, code: 'upstream_error' }
   }
 }
+
+import {
+  fetchWorkspaceThreads,
+  fetchThreadDetail,
+  createWorkspaceThread,
+  updateWorkspaceThread,
+  deleteWorkspaceThread,
+  appendMessageToThread,
+} from '@/lib/server/workspace-threads'
+import type { WorkspaceThread, WorkspaceMessage } from '@/lib/types'
+
+export async function getWorkspaceThreadsAction(search?: string, tag?: string): Promise<WorkspaceThread[]> {
+  return await fetchWorkspaceThreads('letstute', search, tag)
+}
+
+export async function getThreadDetailAction(threadId: string): Promise<WorkspaceThread | null> {
+  return await fetchThreadDetail(threadId, 'letstute')
+}
+
+export async function createThreadAction(title: string, tag?: string): Promise<WorkspaceThread> {
+  return await createWorkspaceThread(title, tag, 'letstute')
+}
+
+export async function updateThreadAction(
+  threadId: string,
+  updates: { title?: string; is_pinned?: boolean; tag?: string },
+): Promise<WorkspaceThread | null> {
+  return await updateWorkspaceThread(threadId, updates, 'letstute')
+}
+
+export async function deleteThreadAction(threadId: string): Promise<boolean> {
+  return await deleteWorkspaceThread(threadId, 'letstute')
+}
+
+export async function saveMessageAction(
+  threadId: string,
+  role: 'user' | 'assistant',
+  content: string,
+  citations?: Citation[],
+  grounded?: boolean,
+): Promise<WorkspaceMessage> {
+  return await appendMessageToThread(threadId, role, content, 'Claude', citations, grounded, 'letstute')
+}
+

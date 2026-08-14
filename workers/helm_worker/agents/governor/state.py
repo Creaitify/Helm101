@@ -1,40 +1,35 @@
-"""The Governor graph's state. Same serialisability rules as the others."""
+"""Typed state for the Governor Star Topology graph."""
 
 from __future__ import annotations
 
-from typing import Annotated, Any, TypedDict
-
-
-def _last_write_wins(_current: Any, incoming: Any) -> Any:
-    return incoming
+from typing import Any, TypedDict
 
 
 class GovernorState(TypedDict, total=False):
-    """Everything a run needs to survive a restart."""
-
-    # Inputs
     run_id: str
+    tenant_id: str
     objective: str
-
-    # Produced by `plan` — the only model call.
-    plan_summary: Annotated[str, _last_write_wins]
-    raw_steps: Annotated[list[dict[str, Any]], _last_write_wins]
-    model_calls: Annotated[int, _last_write_wins]
-
-    # Produced by `validate` — pure code.
-    steps: Annotated[list[dict[str, Any]], _last_write_wins]
-    validation_notes: Annotated[list[str], _last_write_wins]
-
-    # The human gate.
-    proposal: Annotated[dict[str, Any], _last_write_wins]
-    decision: Annotated[str, _last_write_wins]
-    decision_reason: Annotated[str, _last_write_wins]
-    executed_key: Annotated[str, _last_write_wins]
-    execution_log: Annotated[list[str], _last_write_wins]
-
-    # Produced by `execute`: the child runs actually dispatched. Each child
-    # pauses at its own approval gate — the Governor never bypasses one.
-    children: Annotated[list[dict[str, str]], _last_write_wins]
-
-    status: Annotated[str, _last_write_wins]
-    error_code: Annotated[str, _last_write_wins]
+    status: str
+    # Star topology routing state
+    next_agent: str | None
+    governor_rationale: str
+    loopback_count: int
+    current_hop_index: int
+    hops: list[dict[str, Any]]
+    # Dynamic Planning & Delegation
+    plan: dict[str, Any] | None
+    required_agents: list[str] | None
+    # Intermediate payloads per specialist
+    analyst_findings: dict[str, Any] | None
+    creative_brief: dict[str, Any] | None
+    creative_deck: dict[str, Any] | None
+    media_package: dict[str, Any] | None
+    budget_proposal: dict[str, Any] | None
+    # HITL gate and execution
+    proposal: dict[str, Any]
+    decision: str
+    decision_reason: str
+    executed_key: str | None
+    execution_log: list[str]
+    error_code: str | None
+    model_calls: int

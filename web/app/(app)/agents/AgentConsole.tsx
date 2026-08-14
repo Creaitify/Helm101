@@ -1,10 +1,32 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
+import { useSearchParams } from 'next/navigation'
+import Link from 'next/link'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
-import { executeAgent, decideAgent, type AgentKind, type AgentActionResponse } from './actions'
-import { CheckCircle2, XCircle, AlertTriangle, ArrowRight, ShieldCheck, Cpu, Play } from 'lucide-react'
+import { executeAgent, decideAgent, inspectAgent, type AgentKind, type AgentActionResponse } from './actions'
+import type { HandoffEnvelope } from '@/lib/types'
+import {
+  CheckCircle2,
+  XCircle,
+  AlertTriangle,
+  ArrowRight,
+  ShieldCheck,
+  Cpu,
+  Play,
+  RotateCw,
+  Eye,
+  FileCode,
+  Layers,
+  Sparkles,
+  DollarSign,
+  PenTool,
+  BarChart3,
+  Clock,
+  ChevronRight,
+  X,
+} from 'lucide-react'
 
 interface AgentMeta {
   kind: AgentKind
@@ -21,14 +43,14 @@ const ROSTER: AgentMeta[] = [
     kind: 'governor',
     name: 'Governor',
     code: 'GV',
-    tagline: 'Multi-Agent Supervisor',
-    description: 'Deconstructs broad growth objectives into structured delegations across the agent fleet and coordinates child runs.',
+    tagline: 'Multi-Agent Star Relay Supervisor',
+    description: 'Orchestrates the canonical relay: Analyst (AN) ↔ Governor (GV) ↔ Creative (CR) ↔ Governor (GV) ↔ Media Buyer (MB) ↔ Governor (GV) ↔ HITL Gate.',
     presets: [
+      'Orchestrate growth push for ₹999 Financial Health Checkup: audit 30D trends, draft SEBI-compliant copy variants, and rebalance daily budgets within ±25% caps.',
       'Lower blended CAC by 15% across all channels without reducing checkup volume.',
-      'Coordinate full push for the ₹999 Financial Health Checkup across Creative and Media teams.',
       'Audit channel performance and refresh ad copy to improve advisory conversion.',
     ],
-    placeholder: 'Enter a strategic objective for the Governor to plan and delegate...',
+    placeholder: 'Set your business objective — Governor will orchestrate the full relay',
   },
   {
     kind: 'media_buyer',
@@ -72,6 +94,9 @@ const ROSTER: AgentMeta[] = [
 ]
 
 export function AgentConsole() {
+  const searchParams = useSearchParams()
+  const objectiveParam = searchParams?.get('objective')
+
   const [selectedAgent, setSelectedAgent] = useState<AgentMeta>(ROSTER[0])
   const [prompt, setPrompt] = useState(ROSTER[0].presets[0])
   const [result, setResult] = useState<AgentActionResponse | null>(null)
@@ -79,15 +104,63 @@ export function AgentConsole() {
   const [deciding, setDeciding] = useState(false)
   const [rejectReason, setRejectReason] = useState('')
   const [showRejectInput, setShowRejectInput] = useState(false)
+  const [selectedEnvelope, setSelectedEnvelope] = useState<HandoffEnvelope | null>(null)
+
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // Pre-fill objective from searchParams if navigated from Workspace
+  useEffect(() => {
+    if (objectiveParam) {
+      const gov = ROSTER.find((a) => a.kind === 'governor') || ROSTER[0]
+      setSelectedAgent(gov)
+      setPrompt(objectiveParam)
+    }
+  }, [objectiveParam])
+
+  // Clear polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollingRef.current) clearInterval(pollingRef.current)
+    }
+  }, [])
+
+  // Short-polling for active runs
+  useEffect(() => {
+    if (result?.runId && result.status === 'running') {
+      if (pollingRef.current) clearInterval(pollingRef.current)
+      pollingRef.current = setInterval(async () => {
+        const updated = await inspectAgent(result.runId!)
+        if (updated.ok) {
+          setResult(updated)
+          if (updated.status !== 'running') {
+            if (pollingRef.current) clearInterval(pollingRef.current)
+            pollingRef.current = null
+          }
+        }
+      }, 1500)
+    } else {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current)
+        pollingRef.current = null
+      }
+    }
+  }, [result?.runId, result?.status])
 
   async function handleRun() {
     if (!prompt.trim() || busy) return
     setBusy(true)
     setResult(null)
     setShowRejectInput(false)
+    setSelectedEnvelope(null)
     try {
       const res = await executeAgent(selectedAgent.kind, prompt)
       setResult(res)
+    } catch (err: any) {
+      setResult({
+        ok: false,
+        status: 'failed',
+        error: err?.message || 'Agent execution failed',
+      })
     } finally {
       setBusy(false)
     }
@@ -111,10 +184,19 @@ export function AgentConsole() {
     setPrompt(agent.presets[0])
     setResult(null)
     setShowRejectInput(false)
+    setSelectedEnvelope(null)
   }
 
   const state = result?.state || {}
   const isAwaiting = result?.isAwaitingApproval || result?.status === 'awaiting_approval'
+  const hops: any[] = state.hops || []
+  const isGovernor = selectedAgent.kind === 'governor' || (result?.runId && result.runId.startsWith('gv-'))
+
+  // Calculate Relay step active states
+  const hasAnalyst = hops.some((h) => h.from_agent === 'analyst')
+  const hasCreative = hops.some((h) => h.from_agent === 'creative')
+  const hasMediaBuyer = hops.some((h) => h.from_agent === 'media_buyer')
+  const hasHitl = isAwaiting || result?.status === 'completed' || result?.status === 'rejected'
 
   return (
     <Card className="agent-console">
@@ -122,7 +204,7 @@ export function AgentConsole() {
         <div>
           <h3>Run a live agent</h3>
           <div className="sub">
-            Interactive Operations Console · Trigger durable LangGraph workflows through the FastAPI Gateway · Checkpointed in SQLite
+            Interactive Operations Console · Star Relay Topology · SQLite Envelopes & Audit Trail · Human-in-the-Loop Checkpoints
           </div>
         </div>
         <span className="pill v">
@@ -152,327 +234,436 @@ export function AgentConsole() {
         })}
       </div>
 
-      <div className="agent-desc-bar">
+      {/* Active Agent Header & Presets */}
+      <div className="agent-meta-banner">
         <p>{selectedAgent.description}</p>
-      </div>
-
-      {/* Quick Prompt Presets */}
-      <div className="agent-presets">
-        <span className="preset-label">Suggested Goals:</span>
-        <div className="preset-pills">
-          {selectedAgent.presets.map((p, i) => (
-            <button key={i} type="button" className="preset-pill" onClick={() => setPrompt(p)}>
-              {p}
+        <div className="agent-presets">
+          <span className="agent-presets-label">Preset goals:</span>
+          {selectedAgent.presets.map((preset, idx) => (
+            <button
+              key={idx}
+              type="button"
+              className="agent-preset-chip"
+              onClick={() => setPrompt(preset)}
+            >
+              {preset.length > 55 ? `${preset.slice(0, 55)}…` : preset}
             </button>
           ))}
         </div>
       </div>
 
-      {/* Input Area */}
-      <textarea
-        className="agent-prompt"
-        value={prompt}
-        rows={3}
-        onChange={(e) => setPrompt(e.target.value)}
-        placeholder={selectedAgent.placeholder}
-      />
-
-      <div className="agent-console-foot">
-        <span className="sub">
-          <ShieldCheck width={14} height={14} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 4 }} />
-          All actions require explicit human sign-off before durable execution.
-        </span>
-        <Button variant="primary" onClick={handleRun} disabled={busy || !prompt.trim()}>
-          {busy ? (
-            'Executing Agent Graph…'
-          ) : (
-            <>
-              <Play width={13} height={13} />
-              Run {selectedAgent.name}
-            </>
-          )}
-        </Button>
+      {/* Input / Execution Box */}
+      <div className="agent-input-wrap">
+        {selectedAgent.kind === 'governor' && (
+          <div className="agent-preset-chips-wrap">
+            <span className="preset-label">Preset Objectives:</span>
+            <div className="agent-preset-chips">
+              {selectedAgent.presets.map((preset, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  className={`preset-chip-btn ${prompt === preset ? 'active' : ''}`}
+                  onClick={() => setPrompt(preset)}
+                >
+                  <b>Preset {idx + 1}</b>
+                  <span>{preset}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        <textarea
+          rows={3}
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          placeholder={selectedAgent.placeholder}
+          disabled={busy}
+        />
+        <div className="agent-input-footer">
+          <div className="agent-input-note">
+            <ShieldCheck width={14} height={14} color="var(--emerald-2)" />
+            <span>State checkpointed at every step. Model calls are never repeated on resume.</span>
+          </div>
+          <Button
+            variant="primary"
+            className={selectedAgent.kind === 'governor' ? 'btn-governor-dispatch' : ''}
+            aria-label={`Start ${selectedAgent.name} Run · Dispatch Mission`}
+            disabled={busy || !prompt.trim()}
+            onClick={handleRun}
+          >
+            <Play width={14} height={14} />
+            {busy
+              ? (selectedAgent.kind === 'governor' ? 'Dispatching Mission…' : 'Running Graph…')
+              : (selectedAgent.kind === 'governor' ? '🚀 Dispatch Mission' : `Start ${selectedAgent.name} Run`)}
+          </Button>
+        </div>
       </div>
 
-      {/* Results View */}
+      {/* Star Relay Stepper (for Governor Relay runs) */}
+      {isGovernor && (busy || result) && (
+        <div className="relay-stepper-wrap">
+          <div className="relay-stepper-header">
+            <span className="relay-title">
+              <Layers width={14} height={14} style={{ display: 'inline', marginRight: 6 }} />
+              Governor Star Topology Relay
+            </span>
+            <span className="relay-sub">AN ↔ GV ↔ CR ↔ GV ↔ MB ↔ GV ↔ HITL</span>
+          </div>
+
+          <div className="relay-steps">
+            {/* Step 1: Analyst */}
+            <div className={`relay-step-card ${hasAnalyst ? 'done' : busy ? 'active' : ''}`}>
+              <div className="relay-step-icon">
+                <BarChart3 width={16} height={16} />
+              </div>
+              <div className="relay-step-content">
+                <b>1. Analyst Audit</b>
+                <small>{hasAnalyst ? 'Findings passed' : busy ? 'Auditing trends…' : 'Pending'}</small>
+              </div>
+            </div>
+
+            <div className="relay-arrow">↔</div>
+
+            {/* Hub: Governor */}
+            <div className="relay-step-card governor done">
+              <div className="relay-step-icon">
+                <ShieldCheck width={16} height={16} />
+              </div>
+              <div className="relay-step-content">
+                <b>Governor Hub</b>
+                <small>Orchestrating</small>
+              </div>
+            </div>
+
+            <div className="relay-arrow">↔</div>
+
+            {/* Step 2: Creative */}
+            <div className={`relay-step-card ${hasCreative ? 'done' : hasAnalyst && busy ? 'active' : ''}`}>
+              <div className="relay-step-icon">
+                <PenTool width={16} height={16} />
+              </div>
+              <div className="relay-step-content">
+                <b>2. Creative Copy</b>
+                <small>{hasCreative ? 'SEBI passed' : hasAnalyst && busy ? 'Drafting…' : 'Pending'}</small>
+              </div>
+            </div>
+
+            <div className="relay-arrow">↔</div>
+
+            {/* Step 3: Media Buyer */}
+            <div className={`relay-step-card ${hasMediaBuyer ? 'done' : hasCreative && busy ? 'active' : ''}`}>
+              <div className="relay-step-icon">
+                <DollarSign width={16} height={16} />
+              </div>
+              <div className="relay-step-content">
+                <b>3. Media Buyer</b>
+                <small>{hasMediaBuyer ? '±25% caps checked' : hasCreative && busy ? 'Optimizing…' : 'Pending'}</small>
+              </div>
+            </div>
+
+            <div className="relay-arrow">→</div>
+
+            {/* Step 4: HITL Gate */}
+            <div className={`relay-step-card hitl ${hasHitl ? (isAwaiting ? 'active' : 'done') : ''}`}>
+              <div className="relay-step-icon">
+                <Cpu width={16} height={16} />
+              </div>
+              <div className="relay-step-content">
+                <b>4. HITL Gate</b>
+                <small>{isAwaiting ? 'Decision needed' : result?.status === 'completed' ? 'Approved' : result?.status === 'rejected' ? 'Rejected' : 'Pending'}</small>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Execution Results View */}
       {result && (
-        <div className="agent-result-box">
-          {result.ok ? (
-            <div className="agent-result-content">
-              {/* Step Progression Timeline */}
-              <div className="agent-step-timeline">
-                <div className="timeline-line">
-                  <div
-                    className="timeline-line-fill"
-                    style={{ width: isAwaiting ? '75%' : '100%' }}
-                  />
+        <div className="agent-result-panel">
+          {/* Status Bar */}
+          <div className="agent-status-bar">
+            <div className="agent-run-id">
+              <span>Run ID:</span>
+              <code>{result.runId}</code>
+            </div>
+            <div className="agent-status-tag">
+              {result.status === 'awaiting_approval' && (
+                <span className="pill w">
+                  <AlertTriangle width={12} height={12} style={{ display: 'inline', marginRight: 4 }} />
+                  Awaiting Operator Approval
+                </span>
+              )}
+              {result.status === 'completed' && (
+                <span className="pill g">
+                  <CheckCircle2 width={12} height={12} style={{ display: 'inline', marginRight: 4 }} />
+                  Completed
+                </span>
+              )}
+              {result.status === 'rejected' && (
+                <span className="pill r">
+                  <XCircle width={12} height={12} style={{ display: 'inline', marginRight: 4 }} />
+                  Rejected by Human
+                </span>
+              )}
+              {(result.status === 'failed' || (!result.ok && result.error)) && (
+                <span className="pill r">
+                  <XCircle width={12} height={12} style={{ display: 'inline', marginRight: 4 }} />
+                  Failed: {result.error || state.error_code || 'Execution failed'}
+                </span>
+              )}
+              {result.status === 'running' && (
+                <span className="pill v">
+                  <RotateCw width={12} height={12} className="spin" style={{ display: 'inline', marginRight: 4 }} />
+                  Executing
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Chronological Relay Hops Feed */}
+          {hops.length > 0 && (
+            <div className="relay-hops-feed">
+              <div className="relay-hops-feed-title">
+                <Clock width={13} height={13} style={{ display: 'inline', marginRight: 6 }} />
+                Chronological Relay Envelopes ({hops.length} hops logged)
+              </div>
+              <div className="relay-hops-list">
+                {hops.map((hop: any, idx: number) => {
+                  return (
+                    <div
+                      key={idx}
+                      className={`relay-hop-row ${hop.verdict}`}
+                      onClick={() =>
+                        setSelectedEnvelope({
+                          hopIndex: hop.hop_index ?? idx,
+                          fromAgent: hop.from_agent,
+                          toAgent: hop.to_agent,
+                          hopKind: hop.hop_kind,
+                          runId: hop.run_id,
+                          tenantId: hop.tenant_id,
+                          schemaVersion: hop.schema_version,
+                          summary: hop.summary,
+                          payload: hop.payload || {},
+                          governorRationale: hop.governor_rationale,
+                          verdict: hop.verdict,
+                          tokensIn: hop.tokens_in,
+                          tokensOut: hop.tokens_out,
+                          costMicros: hop.estimated_cost_micros,
+                          createdAt: hop.ts,
+                        })
+                      }
+                    >
+                      <div className="relay-hop-left">
+                        <span className="relay-hop-idx">#{hop.hop_index ?? idx}</span>
+                        <span className="relay-hop-agents">
+                          <b className="agent-badge">{hop.from_agent?.toUpperCase()}</b>
+                          <ArrowRight width={12} height={12} style={{ opacity: 0.5 }} />
+                          <b className="agent-badge">{hop.to_agent?.toUpperCase()}</b>
+                        </span>
+                        <span className="relay-hop-kind">{hop.hop_kind}</span>
+                      </div>
+                      <div className="relay-hop-summary">{hop.summary}</div>
+                      <div className="relay-hop-right">
+                        <span className={`pill-micro ${hop.verdict}`}>{hop.verdict}</span>
+                        <button type="button" className="btn-inspect">
+                          <Eye width={12} height={12} style={{ marginRight: 4 }} />
+                          Inspect
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* HITL Gate Decision Card */}
+          {isAwaiting && result.interruptPayload && (
+            <div className="hitl-decision-card">
+              <div className="hitl-header">
+                <div className="hitl-title">
+                  <ShieldCheck width={18} height={18} color="var(--amber-2)" />
+                  <h4>Human Authorization Required</h4>
                 </div>
-                <div className="timeline-step-node">
-                  <div className="step-circle done">1</div>
-                  <span className="step-label">Policy Init</span>
-                </div>
-                <div className="timeline-step-node">
-                  <div className="step-circle done">2</div>
-                  <span className="step-label">Model Reasoning</span>
-                </div>
-                <div className="timeline-step-node">
-                  <div className="step-circle done">3</div>
-                  <span className="step-label">Constraint Caps</span>
-                </div>
-                <div className="timeline-step-node">
-                  <div className={`step-circle ${isAwaiting ? 'active' : 'done'}`}>4</div>
-                  <span className="step-label">{isAwaiting ? 'HITL Checkpoint' : 'Gate Passed'}</span>
-                </div>
-                <div className="timeline-step-node">
-                  <div className={`step-circle ${isAwaiting ? '' : 'done'}`}>5</div>
-                  <span className="step-label">{isAwaiting ? 'Resume Execution' : 'Committed'}</span>
-                </div>
+                <span className="hitl-sub">Pausing at checkpoint — state preserved in checkpointer database.</span>
               </div>
 
-              {/* Header */}
-              <div className="result-head">
-                <div className="result-status-pill">
-                  {isAwaiting ? (
-                    <span className="status rev">
-                      <i />
-                      Awaiting Human Approval
-                    </span>
-                  ) : (
-                    <span className="status on">
-                      <i />
-                      {result.status || 'Completed'}
-                    </span>
-                  )}
+              <div className="hitl-body">
+                <div className="hitl-summary-box">
+                  <b>Proposal Summary:</b>
+                  <p>{result.interruptPayload.summary || result.interruptPayload.action}</p>
                 </div>
-                <div className="result-meta">
-                  <span>Run ID: <code>{result.runId}</code></span>
-                  {state.model_calls !== undefined && <span>· Model Calls: {state.model_calls}</span>}
-                </div>
-              </div>
 
-              {/* In-Console Human Decision Banner */}
-              {isAwaiting && (
-                <div className="hitl-banner">
-                  <div className="hitl-info">
-                    <AlertTriangle width={20} height={20} color="var(--amber)" />
-                    <div>
-                      <b>Action Gated: Human Decision Required</b>
-                      <p>
-                        {result.interruptPayload?.summary ||
-                          'The agent has prepared a proposal and paused at its checkpoint. Approve to resume execution or reject with rationale.'}
-                      </p>
-                    </div>
-                  </div>
-
-                  {showRejectInput ? (
-                    <div className="reject-form">
-                      <input
-                        type="text"
-                        placeholder="Reason for rejection (optional)..."
-                        value={rejectReason}
-                        onChange={(e) => setRejectReason(e.target.value)}
-                      />
-                      <div className="reject-actions">
-                        <Button onClick={() => handleDecision('rejected')} disabled={deciding}>
-                          Confirm Reject
-                        </Button>
-                        <Button onClick={() => setShowRejectInput(false)}>Cancel</Button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="hitl-actions">
-                      <Button variant="primary" onClick={() => handleDecision('approved')} disabled={deciding}>
-                        <CheckCircle2 width={14} height={14} />
-                        {deciding ? 'Resuming…' : 'Approve & Execute'}
-                      </Button>
-                      <Button onClick={() => setShowRejectInput(true)} disabled={deciding}>
-                        <XCircle width={14} height={14} />
-                        Reject Proposal
-                      </Button>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Agent Specific Viewers */}
-              {/* 1. MEDIA BUYER */}
-              {selectedAgent.kind === 'media_buyer' && (
-                <div className="agent-structured-view">
-                  {state.analysis && (
-                    <div className="analysis-card">
-                      <h4>Strategic Analysis</h4>
-                      <p>{state.analysis}</p>
-                    </div>
-                  )}
-
-                  {Array.isArray(state.shifts) && state.shifts.length > 0 && (
-                    <div className="shifts-section">
-                      <h4>Proposed Budget Shifts (Enforced in Code)</h4>
-                      <div className="shifts-table">
-                        <div className="shifts-thead">
-                          <span>Campaign</span>
-                          <span>Current</span>
-                          <span>Proposed</span>
-                          <span>Shift Reason</span>
-                        </div>
-                        {state.shifts.map((s: any, idx: number) => {
-                          const curr = Number(s.current_budget) || 0
-                          const prop = Number(s.proposed_budget) || 0
-                          const diff = prop - curr
-                          const diffPct = curr ? ((diff / curr) * 100).toFixed(1) : '0'
-                          const isUp = diff > 0
-                          const maxBudget = 60000
-                          const currPct = Math.min(100, Math.max(10, (curr / maxBudget) * 100))
-                          const propPct = Math.min(100, Math.max(10, (prop / maxBudget) * 100))
-                          return (
-                            <div key={idx} className="shifts-trow">
-                              <span className="shift-camp">
-                                <b>{s.campaign_id}</b>
-                                <div className="delta-bar-wrap">
-                                  <div className="delta-bar-track">
-                                    <div
-                                      className={`delta-bar-fill ${isUp ? 'up' : 'down'}`}
-                                      style={{ width: `${propPct}%` }}
-                                    />
-                                  </div>
-                                </div>
-                              </span>
-                              <span className="mono">₹{curr.toLocaleString()}</span>
-                              <span className="mono shift-prop">
-                                ₹{prop.toLocaleString()}{' '}
-                                <small className={isUp ? 'good' : 'bad'}>
-                                  ({isUp ? `+${diffPct}%` : `${diffPct}%`})
-                                </small>
-                              </span>
-                              <span className="shift-reason">{s.reason}</span>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* 2. CREATIVE */}
-              {selectedAgent.kind === 'creative' && (
-                <div className="agent-structured-view">
-                  <h4>SEBI-Checked Creative Variants</h4>
-                  <div className="creative-variants-list">
-                    {Array.isArray(state.variants) &&
-                      state.variants.map((v: any, idx: number) => {
-                        const verdict = state.verdicts?.[idx] || { status: 'pass' }
-                        const isPass = verdict.status === 'pass'
-                        const isFlag = verdict.status === 'flag'
-                        return (
-                          <div key={idx} className={`creative-card ${verdict.status}`}>
-                            <div className="creative-head">
-                              <span className="variant-num">Variant #{idx + 1}</span>
-                              <span className={`compliance-badge ${verdict.status}`}>
-                                {isPass ? 'SEBI Pass' : isFlag ? 'SEBI Flagged' : 'Blocked'}
-                              </span>
-                            </div>
-                            <h5>{v.headline}</h5>
-                            <p>{v.body}</p>
-                            {verdict.matched && (
-                              <div className="rule-match">
-                                <b>Matched Rule:</b> {verdict.matched}
-                              </div>
-                            )}
-                          </div>
-                        )
-                      })}
-                  </div>
-                </div>
-              )}
-
-              {/* 3. GOVERNOR */}
-              {selectedAgent.kind === 'governor' && (
-                <div className="agent-structured-view">
-                  {state.plan_summary && (
-                    <div className="analysis-card">
-                      <h4>Delegation Plan Summary</h4>
-                      <p>{state.plan_summary}</p>
-                    </div>
-                  )}
-
-                  {Array.isArray(state.delegations) && state.delegations.length > 0 && (
-                    <div className="delegations-list">
-                      <h4>Dispatched Sub-Tasks</h4>
-                      <div className="delegation-grid">
-                        {state.delegations.map((d: any, idx: number) => (
-                          <div key={idx} className="delegation-card">
-                            <div className="delegation-head">
-                              <span className="delegation-agent-tag">{d.agent}</span>
-                            </div>
-                            <b>{d.task}</b>
-                            <p>{d.rationale}</p>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {Array.isArray(state.children) && state.children.length > 0 && (
-                    <div className="children-list">
-                      <h4>Active Child Runs</h4>
-                      {state.children.map((c: any, idx: number) => (
-                        <div key={idx} className="child-run-chip">
-                          <span>{c.agent}</span>
-                          <ArrowRight width={12} height={12} />
-                          <code>{c.run_id}</code>
+                {/* Shifts Preview if Media Buyer or Relay */}
+                {result.interruptPayload.shifts && result.interruptPayload.shifts.length > 0 && (
+                  <div className="hitl-shifts-preview">
+                    <span className="preview-label">Proposed Daily Budget Shifts:</span>
+                    <div className="shifts-table">
+                      {result.interruptPayload.shifts.map((s: any, idx: number) => (
+                        <div key={idx} className="shift-row">
+                          <span className="shift-id">{s.campaign_id}</span>
+                          <span className="shift-nums">
+                            ₹{Number(s.current_budget).toLocaleString()} → <b>₹{Number(s.proposed_budget).toLocaleString()}</b>
+                          </span>
+                          <span className="shift-reason">{s.reason}</span>
                         </div>
                       ))}
                     </div>
-                  )}
-                </div>
-              )}
+                  </div>
+                )}
 
-              {/* 4. ANALYST */}
-              {selectedAgent.kind === 'analyst' && (
-                <div className="agent-structured-view">
-                  {state.answer && (
-                    <div className="analysis-card">
-                      <h4>Grounded Response</h4>
-                      <div className="analyst-answer">{state.answer}</div>
+                {/* Variants Preview if Creative or Relay */}
+                {result.interruptPayload.variants && result.interruptPayload.variants.length > 0 && (
+                  <div className="hitl-variants-preview">
+                    <span className="preview-label">Compliant Copy Variants:</span>
+                    <div className="variants-list">
+                      {result.interruptPayload.variants.map((v: any, idx: number) => (
+                        <div key={idx} className="variant-box">
+                          <b>{v.headline}</b>
+                          <p>{v.body}</p>
+                        </div>
+                      ))}
                     </div>
-                  )}
+                  </div>
+                )}
 
-                  {Array.isArray(state.citations) && state.citations.length > 0 && (
-                    <div className="citations-list">
-                      <h4>Verified Documentation Citations ({state.citations.length})</h4>
-                      <div className="citations-grid">
-                        {state.citations.map((c: any, idx: number) => (
-                          <div key={idx} className="citation-card">
-                            <span className="cit-doc">{c.doc}:{c.start_line}</span>
-                            <b className="cit-head">{c.heading}</b>
-                            {c.quote && <p className="cit-quote">&ldquo;{c.quote}&rdquo;</p>}
-                          </div>
-                        ))}
+                {/* Policy Checks Badges */}
+                {result.interruptPayload.checks && (
+                  <div className="hitl-checks">
+                    {result.interruptPayload.checks.map((chk: any, idx: number) => (
+                      <span key={idx} className="check-badge pass">
+                        <CheckCircle2 width={12} height={12} />
+                        {chk.label}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+                {/* Decision Action Buttons */}
+                <div className="hitl-footer">
+                  {!showRejectInput ? (
+                    <div className="hitl-actions">
+                      <Button
+                        variant="primary"
+                        disabled={deciding}
+                        onClick={() => handleDecision('approved')}
+                      >
+                        <CheckCircle2 width={15} height={15} />
+                        {deciding ? 'Authorizing…' : 'Approve & Execute'}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        disabled={deciding}
+                        onClick={() => setShowRejectInput(true)}
+                      >
+                        <XCircle width={15} height={15} />
+                        Reject Proposal
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="hitl-reject-box">
+                      <input
+                        type="text"
+                        placeholder="Enter reason for rejection (optional)..."
+                        value={rejectReason}
+                        onChange={(e) => setRejectReason(e.target.value)}
+                      />
+                      <div className="hitl-reject-btns">
+                        <Button
+                          variant="primary"
+                          disabled={deciding}
+                          onClick={() => handleDecision('rejected')}
+                        >
+                          Confirm Rejection
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() => setShowRejectInput(false)}
+                        >
+                          Cancel
+                        </Button>
                       </div>
                     </div>
                   )}
-                </div>
-              )}
 
-              {/* Execution Log */}
-              {Array.isArray(state.execution_log) && state.execution_log.length > 0 && (
-                <div className="execution-log">
-                  <h4>Execution Receipts</h4>
-                  <ul>
-                    {state.execution_log.map((entry: string, i: number) => (
-                      <li key={i}>{entry}</li>
-                    ))}
-                  </ul>
+                  <div className="hitl-approvals-link-wrap">
+                    <Link href="/approvals" className="hitl-approvals-link">
+                      📋 View in Approvals →
+                    </Link>
+                  </div>
                 </div>
-              )}
-            </div>
-          ) : (
-            <div className="agent-error-box">
-              <XCircle width={18} height={18} color="var(--bad)" />
-              <span>{result.error || 'An error occurred during agent execution.'}</span>
+              </div>
+          )}
+
+          {/* Execution Log if Completed */}
+          {state.execution_log && state.execution_log.length > 0 && (
+            <div className="execution-log-box">
+              <span className="log-title">Execution Audit Log:</span>
+              <ul>
+                {state.execution_log.map((log: string, idx: number) => (
+                  <li key={idx}>{log}</li>
+                ))}
+              </ul>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Per-Hop Handoff Envelope Inspector Drawer */}
+      {selectedEnvelope && (
+        <div className="cmd-palette-backdrop" onClick={() => setSelectedEnvelope(null)}>
+          <div className="envelope-drawer" onClick={(e) => e.stopPropagation()}>
+            <div className="envelope-drawer-header">
+              <div className="envelope-title-wrap">
+                <FileCode width={16} height={16} color="var(--violet-2)" />
+                <h4>Handoff Envelope · Hop #{selectedEnvelope.hopIndex}</h4>
+              </div>
+              <button className="ibtn" onClick={() => setSelectedEnvelope(null)} aria-label="Close inspector">
+                <X width={16} height={16} />
+              </button>
+            </div>
+
+            <div className="envelope-meta-grid">
+              <div className="meta-cell">
+                <label>Route</label>
+                <div>
+                  <b className="agent-badge">{selectedEnvelope.fromAgent.toUpperCase()}</b>
+                  <ArrowRight width={12} height={12} style={{ display: 'inline', margin: '0 4px', opacity: 0.6 }} />
+                  <b className="agent-badge">{selectedEnvelope.toAgent.toUpperCase()}</b>
+                </div>
+              </div>
+
+              <div className="meta-cell">
+                <label>Hop Kind</label>
+                <div><code>{selectedEnvelope.hopKind}</code></div>
+              </div>
+
+              <div className="meta-cell">
+                <label>Verdict</label>
+                <div><span className={`pill-micro ${selectedEnvelope.verdict}`}>{selectedEnvelope.verdict}</span></div>
+              </div>
+
+              <div className="meta-cell">
+                <label>Schema Version</label>
+                <div><code>{selectedEnvelope.schemaVersion || '1.0.0'}</code></div>
+              </div>
+            </div>
+
+            <div className="envelope-section">
+              <label>Governor Rationale & Direction:</label>
+              <div className="rationale-box">{selectedEnvelope.governorRationale || 'Evaluated and forwarded.'}</div>
+            </div>
+
+            <div className="envelope-section">
+              <label>Typed Payload Object (Discriminated JSON):</label>
+              <pre className="payload-json">{JSON.stringify(selectedEnvelope.payload, null, 2)}</pre>
+            </div>
+
+            <div className="envelope-drawer-footer">
+              <button className="btn" onClick={() => setSelectedEnvelope(null)}>Close Inspector</button>
+            </div>
+          </div>
         </div>
       )}
     </Card>

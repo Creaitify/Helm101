@@ -1,6 +1,6 @@
 'use server'
 
-import { startAgentRun } from '@/lib/server/agent-runner'
+import { startAgentRun, readGovernorVariantsFile } from '@/lib/server/agent-runner'
 import type { Variant, SeriesColor } from '@/lib/types'
 
 const GRADS: [SeriesColor, SeriesColor][] = [
@@ -9,6 +9,14 @@ const GRADS: [SeriesColor, SeriesColor][] = [
   ['emerald', 'sky'],
   ['amber', 'rose'],
 ]
+
+export async function getGovernorVariantsAction(): Promise<any[]> {
+  try {
+    return readGovernorVariantsFile()
+  } catch {
+    return []
+  }
+}
 
 export async function generateLiveVariants(
   audience: string,

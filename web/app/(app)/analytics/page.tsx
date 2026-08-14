@@ -40,7 +40,7 @@ export default async function AnalyticsPage() {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <Link
-            href="/workspace?q=Summarize+last+30d+funnel+conversion+bottlenecks+and+CAC+dispersion"
+            href="/workspace?q=Summarize+last+30d+funnel+conversion+bottlenecks+and+CAC+dispersion&tag=analytics:30d_trends"
             className="ask-analyst-chip"
           >
             <MessageSquare width={13} height={13} />
@@ -85,7 +85,7 @@ export default async function AnalyticsPage() {
               AI insight · revenue is outpacing spend; forecast suggests +9% checkups next week if pacing holds.
             </AIInsightChip>
             <Link
-              href="/workspace?q=Why+is+revenue+outpacing+spend+and+how+should+we+allocate+the+forecasted+9+percent+checkup+lift%3F"
+              href="/workspace?q=Why+is+revenue+outpacing+spend+and+how+should+we+allocate+the+forecasted+9+percent+checkup+lift%3F&tag=analytics:spend_forecast"
               style={{ fontSize: 11.5, color: 'var(--violet-2)', textDecoration: 'none', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}
             >
               Drill-down with AI <MessageSquare width={11} height={11} />

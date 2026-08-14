@@ -1,5 +1,6 @@
 'use client'
 import { useState, useMemo, useRef } from 'react'
+import Link from 'next/link'
 import type { CampaignFull, CampaignDetail } from '@/lib/types'
 import { fetchCampaignDetail } from './actions'
 import { Card } from '@/components/ui/Card'
@@ -94,6 +95,15 @@ export function CampaignsView({ campaigns }: { campaigns: CampaignFull[] }) {
               <div><span className="k">Spend</span><span className="v">{inr(detail.campaign.spend)}</span></div>
               <div><span className="k">Started</span><span className="v">{detail.campaign.startedAt}</span></div>
               <div><span className="k">CAC</span><span className="v">{detail.campaign.cac == null ? '—' : inr(detail.campaign.cac)}</span></div>
+            </div>
+            <div className="so-actions" style={{ margin: '14px 0' }}>
+              <Link
+                href={`/agents?objective=${encodeURIComponent(`Optimize budget and performance for ${detail.campaign.name} (${detail.campaign.channel}) within ±25% policy caps.`)}`}
+                className="btn primary"
+                style={{ width: '100%', justifyContent: 'center', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 6 }}
+              >
+                ⚡ Optimize with Governor Fleet →
+              </Link>
             </div>
             <Card><div className="card-h"><div><h3>Daily results</h3><div className="sub">last 14 days</div></div></div><TrendChart series={detail.series} label="Results" /></Card>
             <Card>

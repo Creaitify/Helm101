@@ -40,3 +40,15 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# demo & browser automation artifacts
+/demo
+demo-*.ts
+demo-*.mjs
+demo-*.js
+/screenshots
+/scratch
+/test-results
+/playwright-report
+/data
+

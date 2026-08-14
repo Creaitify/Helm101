@@ -1,11 +1,15 @@
 'use client'
 import { useState, useRef, useEffect } from 'react'
+import Link from 'next/link'
 import type { Brief, Variant } from '@/lib/types'
 import { buildVariants } from '@/lib/studio'
+import { getGovernorVariantsAction } from './actions'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { ShieldAlert, Sparkles, Check, Send, AlertTriangle, X } from 'lucide-react'
 import { useToast } from '@/components/ui/Toast'
+
+type StudioVariant = Variant & { missionTag?: string; runId?: string }
 
 /**
  * Mock CAC for a shipped chip. Derived from the variant id rather than
@@ -23,12 +27,24 @@ export function StudioView({ brief }: { brief: Brief }) {
   const [form, setForm] = useState<Brief>(brief)
   const [phase, setPhase] = useState<'idle' | 'generating' | 'done'>('idle')
   const [variants, setVariants] = useState<Variant[]>([])
-  const [shipped, setShipped] = useState<Variant[]>([])
+  const [governorVariants, setGovernorVariants] = useState<StudioVariant[]>([])
+  const [shipped, setShipped] = useState<StudioVariant[]>([])
   const [acknowledged, setAcknowledged] = useState<Set<string>>(() => new Set())
-  const [inspectedVariant, setInspectedVariant] = useState<Variant | null>(null)
+  const [inspectedVariant, setInspectedVariant] = useState<StudioVariant | null>(null)
 
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current) }, [])
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const list = await getGovernorVariantsAction()
+        if (Array.isArray(list) && list.length > 0) {
+          setGovernorVariants(list)
+        }
+      } catch {}
+    })()
+  }, [])
 
   function generate() {
     setPhase('generating')
@@ -39,9 +55,10 @@ export function StudioView({ brief }: { brief: Brief }) {
     }, 200)
   }
 
-  function ship(v: Variant) {
+  function ship(v: StudioVariant) {
     setShipped((s) => [...s, v])
     setVariants((vs) => vs.filter((x) => x.id !== v.id))
+    setGovernorVariants((vs) => vs.filter((x) => x.id !== v.id))
     toast(`Variant "${v.headline.substring(0, 24)}…" shipped to ad inventory`)
   }
 
@@ -57,11 +74,24 @@ export function StudioView({ brief }: { brief: Brief }) {
     setAcknowledged((ids) => new Set(ids).add(id))
   }
 
-  function autoFixVariant(v: Variant) {
+  function autoFixVariant(v: StudioVariant) {
     const compliantHeadline = v.headline.replace(/guaranteed|100%|risk-free|assured/gi, 'Transparent') + ' · Advisor Reviewed'
-    const compliantBody = v.body.replace(/guaranteed returns|never lose/gi, 'structured wealth analysis') + ' Note: Investments are subject to market risks.'
+    const compliantBody = (v.body || v.headline).replace(/guaranteed returns|never lose/gi, 'structured wealth analysis') + ' Note: Investments are subject to market risks.'
     
     setVariants((current) =>
+      current.map((item) =>
+        item.id === v.id
+          ? {
+              ...item,
+              headline: compliantHeadline,
+              body: compliantBody,
+              compliance: 'pass' as const,
+              flagReason: undefined,
+            }
+          : item
+      )
+    )
+    setGovernorVariants((current) =>
       current.map((item) =>
         item.id === v.id
           ? {
@@ -123,24 +153,19 @@ export function StudioView({ brief }: { brief: Brief }) {
               <option value="copy">Ad Copy Only</option>
             </select>
           </label>
-          <Button variant="primary" onClick={generate}>
-            <Sparkles width={13} height={13} />
-            Generate
-          </Button>
-        </Card>
 
-        <div className="studio-out">
-          {phase === 'generating' && (
-            <div className="var-grid">
-              {[0, 1, 2, 3].map((i) => <div key={i} className="var skeleton" />)}
-            </div>
-          )}
-
-          {phase === 'done' && (
-            <>
-              <div className="var-grid">
-                {variants.map((v) => (
-                  <div key={v.id} className="var">
+          {governorVariants.length > 0 && (
+            <div className="gov-missions-section">
+              <div className="gov-missions-header">
+                <span className="gov-missions-title">⚡ From Governor Missions ({governorVariants.length})</span>
+                <small>Dispatched from autonomous relays</small>
+              </div>
+              <div className="gov-variants-mini-grid">
+                {governorVariants.map((v) => (
+                  <div key={v.id} className="var gov-var">
+                    <div className="var-mission-tag">
+                      <span className="pill v">{v.missionTag || `Mission #${v.runId}`}</span>
+                    </div>
                     {v.kind === 'image' ? (
                       <div
                         className="var-thumb"
@@ -149,7 +174,7 @@ export function StudioView({ brief }: { brief: Brief }) {
                         {v.headline}
                       </div>
                     ) : (
-                      <div className="var-copy">{v.body}</div>
+                      <div className="var-copy">{v.body || v.headline}</div>
                     )}
                     <div className="var-foot">
                       <span
@@ -184,26 +209,79 @@ export function StudioView({ brief }: { brief: Brief }) {
                   </div>
                 ))}
               </div>
+            </div>
+          )}
 
-              {shipped.length > 0 && (
-                <Card>
-                  <div className="card-h">
-                    <div>
-                      <h3>Shipped to Production ({shipped.length})</h3>
-                      <div className="sub">Live tracking on active ad accounts</div>
+          <div style={{ display: 'flex', gap: 8, margin: '10px 0 14px' }}>
+            <Button variant="primary" onClick={generate} style={{ flex: 1 }}>
+              <Sparkles width={13} height={13} />
+              Generate
+            </Button>
+            <Link
+              href={`/agents?objective=${encodeURIComponent(`Create ad copy variants for ${form.offer || 'Financial Health Checkup'} targeting ${form.audience || 'young professionals'}`)}`}
+              className="btn"
+              style={{ fontSize: 11, textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 4 }}
+              title="Delegate to autonomous Governor Star Relay"
+            >
+              ⚡ Delegate to Fleet →
+            </Link>
+          </div>
+        </Card>
+
+        <div className="studio-out">
+          {phase === 'generating' && (
+            <div className="var-grid">
+              {[0, 1, 2, 3].map((i) => <div key={i} className="var skeleton" />)}
+            </div>
+          )}
+
+          {phase === 'done' && (
+            <div className="var-grid">
+              {variants.map((v) => (
+                <div key={v.id} className="var">
+                  {v.kind === 'image' ? (
+                    <div
+                      className="var-thumb"
+                      style={{ background: `linear-gradient(135deg,var(--${v.grad[0]}),var(--${v.grad[1]}))` }}
+                    >
+                      {v.headline}
+                    </div>
+                  ) : (
+                    <div className="var-copy">{v.body}</div>
+                  )}
+                  <div className="var-foot">
+                    <span
+                      className={`gate ${v.compliance} sebi-inspector-btn`}
+                      title="Click to open SEBI Compliance Inspector"
+                      onClick={() => setInspectedVariant(v)}
+                    >
+                      {v.compliance === 'pass' ? 'SEBI pass' : `SEBI flag`}
+                    </span>
+                    <div className="var-actions">
+                      {v.compliance === 'flag' && !acknowledged.has(v.id) && (
+                        <Button onClick={() => acknowledge(v.id)}>Acknowledge risk</Button>
+                      )}
+                      <Button
+                        onClick={() => ship(v)}
+                        disabled={v.compliance === 'flag' && !acknowledged.has(v.id)}
+                      >
+                        Ship
+                      </Button>
                     </div>
                   </div>
-                  <div className="ship-strip">
-                    {shipped.map((v) => (
-                      <div key={v.id} className="ship-chip">
-                        {v.headline}
-                        <span className="num">₹{mockCac(v.id)} CAC</span>
-                      </div>
-                    ))}
-                  </div>
-                </Card>
-              )}
-            </>
+                  {v.flagReason && (
+                    <div
+                      className="var-flag"
+                      style={{ cursor: 'pointer' }}
+                      onClick={() => setInspectedVariant(v)}
+                    >
+                      <ShieldAlert width={12} height={12} style={{ display: 'inline', marginRight: 4 }} />
+                      {v.flagReason}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
           )}
 
           {phase === 'idle' && (
@@ -211,6 +289,25 @@ export function StudioView({ brief }: { brief: Brief }) {
               <div className="empty">
                 <h3>No creative variants yet</h3>
                 <p>Fill the brief and hit Generate to produce copy variants with deterministic SEBI compliance checks.</p>
+              </div>
+            </Card>
+          )}
+
+          {shipped.length > 0 && (
+            <Card>
+              <div className="card-h">
+                <div>
+                  <h3>Shipped to Production ({shipped.length})</h3>
+                  <div className="sub">Live tracking on active ad accounts</div>
+                </div>
+              </div>
+              <div className="ship-strip">
+                {shipped.map((v) => (
+                  <div key={v.id} className="ship-chip">
+                    {v.headline}
+                    <span className="num">₹{mockCac(v.id)} CAC</span>
+                  </div>
+                ))}
               </div>
             </Card>
           )}

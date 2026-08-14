@@ -1,15 +1,11 @@
-"""The agent completions endpoint: the one model door for workers.
+"""The agent completions and step tracking endpoint.
 
 Workers hold no provider key — that boundary is enforced by an AST scan and a
 startup guard on their side, and by this endpoint existing on ours. Every
-agent reasoning step (a Media Buyer proposal, a Creative draft, a Governor
-plan) arrives here as a named task, so the gateway's routing table, budget
-ledger and kill switch govern it exactly as they govern the Analyst.
+agent reasoning step arrives here as a named task, governed by the gateway.
 
-Callers name a task from a closed set; they never name a model, a system
-prompt is supplied per task by the worker (it is the worker's graph that owns
-its prompt), and the response is the raw completion text — parsing it is the
-caller's job because the caller declared the schema.
+In addition, workers record each completed hop envelope to /agents/runs/{run_id}/steps,
+which persists the handoff into agent_steps and audit_log for UI inspection.
 """
 
 from __future__ import annotations
@@ -22,16 +18,15 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.deps import current_principal
 from app.auth.principal import Principal
+from app.db.repositories.agent_steps import AgentStepsRepository
 from app.gateway.contracts import CompletionRequest, Message, Role, TaskKind
 from app.gateway.errors import GatewayError
 from app.gateway.service import GatewayService
 
 router = APIRouter(tags=["agents"])
 
-# The closed set of tasks this endpoint serves. Deliberately NOT "any
-# TaskKind": the Analyst's own tasks stay behind the workspace endpoint where
-# retrieval and citation verification wrap them — offering them raw here
-# would be a second, unverified path to the same capability.
+_steps_repo = AgentStepsRepository()
+
 _AGENT_TASKS: dict[str, TaskKind] = {
     TaskKind.MEDIA_BUYER_PROPOSAL.value: TaskKind.MEDIA_BUYER_PROPOSAL,
     TaskKind.CREATIVE_VARIANTS.value: TaskKind.CREATIVE_VARIANTS,
@@ -63,6 +58,40 @@ class CompletionOut(BaseModel):
 
     data: str
     meta: dict[str, Any]
+
+
+class RecordStepIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    hop_index: int
+    from_agent: str
+    to_agent: str
+    hop_kind: str
+    payload: dict[str, Any]
+    governor_rationale: str
+    verdict: str
+    tokens_in: int = 0
+    tokens_out: int = 0
+    cost_micros: int = 0
+
+
+class StepOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    tenant_id: str
+    run_id: str
+    hop_index: int
+    from_agent: str
+    to_agent: str
+    hop_kind: str
+    payload: dict[str, Any]
+    governor_rationale: str
+    verdict: str
+    tokens_in: int
+    tokens_out: int
+    cost_micros: int
+    ts: str
 
 
 class UnknownAgentTask(GatewayError):
@@ -115,3 +144,46 @@ async def agent_completion(
         data=response.text,
         meta={"task": task.value, "request_id": request_id},
     )
+
+
+@router.get(
+    "/agents/runs/{run_id}/steps",
+    response_model=list[StepOut],
+    summary="List all hop envelopes recorded for a run",
+)
+async def list_run_steps(
+    run_id: str,
+    principal: Principal = Depends(current_principal),
+) -> list[StepOut]:
+    tenant_id = str(principal.tenant_id)
+    steps = _steps_repo.list_steps(tenant_id=tenant_id, run_id=run_id)
+    return [StepOut(**s) for s in steps]
+
+
+@router.post(
+    "/agents/runs/{run_id}/steps",
+    response_model=StepOut,
+    status_code=201,
+    summary="Record a hop envelope step into agent_steps and audit_log",
+)
+async def record_run_step(
+    run_id: str,
+    body: RecordStepIn,
+    principal: Principal = Depends(current_principal),
+) -> StepOut:
+    tenant_id = str(principal.tenant_id)
+    step = _steps_repo.record_step(
+        tenant_id=tenant_id,
+        run_id=run_id,
+        hop_index=body.hop_index,
+        from_agent=body.from_agent,
+        to_agent=body.to_agent,
+        hop_kind=body.hop_kind,
+        payload=body.payload,
+        governor_rationale=body.governor_rationale,
+        verdict=body.verdict,
+        tokens_in=body.tokens_in,
+        tokens_out=body.tokens_out,
+        cost_micros=body.cost_micros,
+    )
+    return StepOut(**step)

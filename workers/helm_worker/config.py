@@ -39,7 +39,7 @@ class WorkerSettings(BaseSettings):
     # The only address the worker knows. Every model call and every durable
     # write goes here.
     helm_api_base_url: str = "http://localhost:8000"
-    request_timeout_seconds: float = 180.0
+    request_timeout_seconds: float = 10.0
 
     # Where LangGraph checkpoints live. A file, not memory: the runtime has to
     # survive the process being killed, which is the whole point of it.

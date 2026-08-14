@@ -72,3 +72,60 @@ export interface IntegrationDetail {
   status: 'healthy' | 'degraded' | 'paused' | 'disconnected'
   scopes: string[]; lastSync: string; calls: string; grad: [SeriesColor, SeriesColor]
 }
+
+export interface WorkspaceMessage {
+  id: string
+  threadId: string
+  role: 'user' | 'assistant'
+  content: string
+  model?: string
+  citations?: Citation[]
+  grounded?: boolean
+  tokensIn?: number
+  tokensOut?: number
+  costMicros?: number
+  createdAt: string
+}
+
+export interface WorkspaceThread {
+  id: string
+  tenantId: string
+  userId: string
+  title: string
+  tag?: string | null
+  isPinned: boolean
+  createdAt: string
+  updatedAt: string
+  lastMessagePreview?: string | null
+  messageCount?: number
+  messages?: WorkspaceMessage[]
+}
+
+export type HopKind =
+  | 'governor_plan'
+  | 'analyst_findings'
+  | 'creative_brief'
+  | 'creative_deck'
+  | 'media_package'
+  | 'budget_proposal'
+  | 'hitl_proposal'
+
+export interface HandoffEnvelope {
+  id?: string
+  hopIndex: number
+  fromAgent: string
+  toAgent: string
+  hopKind: HopKind | string
+  runId: string
+  tenantId?: string
+  schemaVersion?: string
+  summary: string
+  payload: Record<string, unknown>
+  governorRationale: string
+  verdict: string
+  tokensIn?: number
+  tokensOut?: number
+  costMicros?: number
+  createdAt?: string
+}
+

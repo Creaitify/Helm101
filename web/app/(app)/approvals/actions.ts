@@ -1,6 +1,6 @@
 'use server'
 
-import { listPendingApprovals, decideAgentRun, type PendingApprovalItem } from '@/lib/server/agent-runner'
+import { listPendingApprovals, decideAgentRun, readLiveApprovalsFile, type PendingApprovalItem } from '@/lib/server/agent-runner'
 import type { ApprovalItem, PolicyCheck } from '@/lib/types'
 
 function formatAgentName(runId: string): { name: string; code: string } {
@@ -83,8 +83,18 @@ function mapToApprovalItem(item: PendingApprovalItem): ApprovalItem {
 }
 
 export async function getLivePendingApprovals(): Promise<ApprovalItem[]> {
-  const pending = await listPendingApprovals()
-  return pending.map(mapToApprovalItem)
+  const pendingWorker = await listPendingApprovals().catch(() => [])
+  const pendingFile = readLiveApprovalsFile()
+
+  const map = new Map<string, PendingApprovalItem>()
+  for (const item of pendingFile) {
+    if (item.runId) map.set(item.runId, item)
+  }
+  for (const item of pendingWorker) {
+    if (item.runId) map.set(item.runId, item)
+  }
+
+  return Array.from(map.values()).map(mapToApprovalItem)
 }
 
 export async function decideApprovalItem(

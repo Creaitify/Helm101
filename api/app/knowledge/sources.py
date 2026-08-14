@@ -15,6 +15,8 @@ plainly rather than letting a reader assume citations point at tenant data.
 
 from __future__ import annotations
 
+import fnmatch
+import os
 from pathlib import Path
 from typing import Protocol
 from uuid import UUID
@@ -101,8 +103,11 @@ class MarkdownFileSource:
     def _discover(self) -> list[Path]:
         if not self._root.is_dir():
             return []
-        return [
-            path
-            for path in self._root.rglob(self._pattern)
-            if path.is_file() and not _EXCLUDED_DIRECTORIES.intersection(path.parts)
-        ]
+        found: list[Path] = []
+        for dirpath, dirnames, filenames in os.walk(self._root):
+            # Prune excluded directories in-place so os.walk does not descend into them
+            dirnames[:] = [d for d in dirnames if d not in _EXCLUDED_DIRECTORIES]
+            for filename in filenames:
+                if fnmatch.fnmatch(filename, self._pattern):
+                    found.append(Path(dirpath) / filename)
+        return found

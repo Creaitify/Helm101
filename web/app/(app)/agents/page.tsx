@@ -1,3 +1,4 @@
+import { Suspense } from 'react'
 import { AgentCard } from '@/components/viz/AgentCard'
 import { getAgents } from '@/lib/data'
 import { AgentConsole } from './AgentConsole'
@@ -33,7 +34,9 @@ export default async function AgentsPage() {
           <AgentCard key={agent.code} agent={agent} />
         ))}
       </div>
-      <AgentConsole />
+      <Suspense fallback={null}>
+        <AgentConsole />
+      </Suspense>
     </div>
   )
 }

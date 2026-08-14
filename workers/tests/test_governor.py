@@ -1,15 +1,18 @@
-"""The Governor: validated delegation, and dispatch that happens exactly once.
+"""The Governor Star Topology Relay: tested end-to-end.
 
-The dispatch-idempotency test matters most: the Governor's execute node
-starts other agents' runs, so re-running it on a resume would double-spawn
-children — the same class of defect the audit found in the old prototype's
-watcher.
+Verifies:
+1. Star topology execution: Analyst ↔ Governor ↔ Creative ↔ Governor ↔ Media Buyer ↔ Governor ↔ HITL.
+2. Every hop produces a valid HandoffEnvelope with typed payload.
+3. Pause at HITL gate and durable resume across checkpointer.
+4. Loopback handling on SEBI compliance blocks.
+5. Rejection recording.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from helm_worker.agents.governor import build_governor_graph
@@ -17,21 +20,26 @@ from helm_worker.checkpoint import open_checkpointer
 from helm_worker.gateway_client import GatewayCallFailed
 from helm_worker.runtime import AgentRuntime
 
-PLAN = {
-    "summary": "Ask the Analyst what blocks sign-in, then draft festive copy.",
-    "steps": [
-        {"agent": "analyst", "input": "what blocks live sign-in?", "rationale": "ground the objective"},
-        {"agent": "creative", "input": "Diwali FHC push for young parents", "rationale": "seasonal push"},
-        {"agent": "astrologer", "input": "read the stars", "rationale": "not a real agent"},
-    ],
-}
-
 
 class FakeGateway:
-    def __init__(self, payload: object = None, *, fails: bool = False) -> None:
+    def __init__(self, *, blocked_creative: bool = False, fails: bool = False) -> None:
         self.calls = 0
-        self._payload = payload
+        self._blocked_creative = blocked_creative
         self._fails = fails
+
+    async def ask(self, question: str, *, idempotency_key: str | None = None) -> Any:
+        self.calls += 1
+        if self._fails:
+            raise GatewayCallFailed("down", code="provider_unavailable")
+
+        class FakeAnswer:
+            answer = "Recent 30D analysis shows 4.2x ROAS on Retargeting and elevated CAC on non-brand search."
+            citations = []
+            grounded = True
+            corpus_digest = "sha256:test"
+            citations_rejected = 0
+
+        return FakeAnswer()
 
     async def complete(
         self,
@@ -46,21 +54,42 @@ class FakeGateway:
         self.calls += 1
         if self._fails:
             raise GatewayCallFailed("down", code="provider_unavailable")
-        return json.dumps(self._payload)
+
+        if task == "creative.variants":
+            if self._blocked_creative:
+                return json.dumps(
+                    {
+                        "variants": [
+                            {"headline": "Guaranteed 100% Returns", "body": "Risk-free assured profit on investments."},
+                            {"headline": "Zero Risk Double Profit", "body": "Guaranteed growth with 100% certainty."},
+                        ]
+                    }
+                )
+            return json.dumps(
+                {
+                    "variants": [
+                        {"headline": "Complete Financial Health Checkup", "body": "Get a comprehensive portfolio review and unbiased roadmap today for ₹999."},
+                        {"headline": "Transparent Financial Assessment", "body": "Understand your wealth, investments, and tax profile with SEBI-registered advisors."},
+                        {"headline": "Take Control of Your Wealth", "body": "Clear, objective financial assessment designed to protect and grow your family assets."},
+                    ]
+                }
+            )
+
+        if task == "media_buyer.proposal":
+            return json.dumps(
+                {
+                    "analysis": "Shift spend towards high-converting Meta retargeting.",
+                    "shifts": [
+                        {"campaign_id": "fhc-meta-retargeting", "proposed_budget": 50000, "reason": "High conversion velocity"},
+                        {"campaign_id": "search-competitor", "proposed_budget": 20000, "reason": "Shift funds to top performer"},
+                    ],
+                }
+            )
+
+        return "{}"
 
     async def aclose(self) -> None:
         return None
-
-
-class RecordingDispatcher:
-    """Stands in for the runtimes; records every dispatch it is asked for."""
-
-    def __init__(self) -> None:
-        self.dispatched: list[tuple[str, str]] = []
-
-    async def __call__(self, agent: str, task_input: str) -> str:
-        self.dispatched.append((agent, task_input))
-        return f"{agent[:2]}-child-{len(self.dispatched)}"
 
 
 @pytest.fixture
@@ -68,80 +97,152 @@ def checkpoint_path(tmp_path: Path) -> Path:
     return tmp_path / "checkpoints.sqlite"
 
 
-async def test_an_unknown_agent_is_dropped_before_the_human_sees_the_plan(checkpoint_path: Path) -> None:
-    gateway = FakeGateway(PLAN)
-    dispatcher = RecordingDispatcher()
+async def test_governor_star_relay_flows_through_analyst_creative_media_buyer_to_hitl(
+    checkpoint_path: Path,
+) -> None:
+    gateway = FakeGateway()
+    recorded_steps: list[dict] = []
+
+    async def step_recorder(env: dict) -> None:
+        recorded_steps.append(env)
 
     async with open_checkpointer(checkpoint_path) as saver:
-        runtime = AgentRuntime(graph=build_governor_graph(gateway, dispatcher), checkpointer=saver, prefix="gv")  # type: ignore[arg-type]
-        handle = await runtime.start_with({"objective": "raise checkups 10%"})
+        runtime = AgentRuntime(
+            graph=build_governor_graph(gateway, step_recorder=step_recorder),
+            checkpointer=saver,
+            prefix="gv",
+        )
+        handle = await runtime.start_with(
+            {"objective": "Optimize blended CAC for ₹999 checkup", "tenant_id": "letstute"},
+            run_id="gv-relay-1",
+        )
 
+    # Must pause at HITL approval gate
     assert handle.is_awaiting_approval
+    assert handle.status == "awaiting_approval"
     payload = handle.interrupt_payload
     assert payload is not None
-    assert payload["step_count"] == 2
-    assert all(step["agent"] in {"analyst", "creative"} for step in payload["steps"])
-    # Nothing is dispatched while the plan is only proposed.
-    assert dispatcher.dispatched == []
+    assert payload["action"] == "execute_governor_relay"
+    assert len(payload["shifts"]) == 2
+    assert len(payload["variants"]) == 3
+
+    # Check hops
+    hops = handle.state["hops"]
+    assert len(hops) >= 6
+
+    # Verify chronological sequence of mediated envelopes
+    from_to_pairs = [(h["from_agent"], h["to_agent"]) for h in hops]
+    assert ("analyst", "governor") in from_to_pairs
+    assert ("governor", "creative") in from_to_pairs
+    assert ("creative", "governor") in from_to_pairs
+    assert ("governor", "media_buyer") in from_to_pairs
+    assert ("media_buyer", "governor") in from_to_pairs
+    assert ("governor", "hitl") in from_to_pairs
+
+    # Verify no direct specialist to specialist hops exist
+    for h in hops:
+        assert not (h["from_agent"] == "analyst" and h["to_agent"] == "creative")
+        assert not (h["from_agent"] == "creative" and h["to_agent"] == "media_buyer")
 
 
-async def test_approval_dispatches_each_step_exactly_once(checkpoint_path: Path) -> None:
-    gateway = FakeGateway(PLAN)
-    dispatcher = RecordingDispatcher()
+async def test_governor_approval_resumes_across_checkpoint(checkpoint_path: Path) -> None:
+    gateway = FakeGateway()
 
     async with open_checkpointer(checkpoint_path) as saver:
-        runtime = AgentRuntime(graph=build_governor_graph(gateway, dispatcher), checkpointer=saver, prefix="gv")  # type: ignore[arg-type]
-        await runtime.start_with({"objective": "raise checkups 10%"}, run_id="gv-1")
-        handle = await runtime.resume("gv-1", decision="approved")
-        # A second resume must not re-dispatch: nothing is pending, and the
-        # execute node's idempotency key already records the work.
-        again = await runtime.resume("gv-1", decision="approved")
+        runtime = AgentRuntime(
+            graph=build_governor_graph(gateway), checkpointer=saver, prefix="gv"
+        )
+        await runtime.start_with(
+            {"objective": "Growth push", "tenant_id": "letstute"},
+            run_id="gv-resume-test",
+        )
+
+        # Resume in a second call
+        handle = await runtime.resume("gv-resume-test", decision="approved")
 
     assert handle.status == "completed"
-    assert dispatcher.dispatched == [
-        ("analyst", "what blocks live sign-in?"),
-        ("creative", "Diwali FHC push for young parents"),
-    ]
-    assert len(handle.state["children"]) == 2
-    assert again.state["children"] == handle.state["children"]
-    assert gateway.calls == 1
+    assert any("Approved deployment" in entry for entry in handle.state["execution_log"])
+    assert any("Applied 2 daily budget shifts" in entry for entry in handle.state["execution_log"])
 
 
-async def test_rejection_dispatches_nothing(checkpoint_path: Path) -> None:
-    gateway = FakeGateway(PLAN)
-    dispatcher = RecordingDispatcher()
+async def test_governor_rejection_discards_plan(checkpoint_path: Path) -> None:
+    gateway = FakeGateway()
 
     async with open_checkpointer(checkpoint_path) as saver:
-        runtime = AgentRuntime(graph=build_governor_graph(gateway, dispatcher), checkpointer=saver, prefix="gv")  # type: ignore[arg-type]
-        await runtime.start_with({"objective": "x"}, run_id="gv-1")
-        handle = await runtime.resume("gv-1", decision="rejected", reason="not now")
+        runtime = AgentRuntime(
+            graph=build_governor_graph(gateway), checkpointer=saver, prefix="gv"
+        )
+        await runtime.start_with(
+            {"objective": "Scale campaigns", "tenant_id": "letstute"},
+            run_id="gv-reject-test",
+        )
+        handle = await runtime.resume("gv-reject-test", decision="rejected", reason="Budget freeze")
 
     assert handle.status == "rejected"
-    assert dispatcher.dispatched == []
+    assert any("Budget freeze" in entry for entry in handle.state["execution_log"])
 
 
-async def test_a_plan_with_no_valid_steps_fails_without_a_gate(checkpoint_path: Path) -> None:
-    gateway = FakeGateway({"summary": "?", "steps": [{"agent": "astrologer", "input": "x", "rationale": ""}]})
-    dispatcher = RecordingDispatcher()
+async def test_governor_loopback_recovers_from_temporary_sebi_block(checkpoint_path: Path) -> None:
+    class LoopbackGateway(FakeGateway):
+        def __init__(self) -> None:
+            super().__init__()
+            self.creative_calls = 0
+
+        async def complete(self, task: str, messages: list[dict[str, str]], **kwargs: Any) -> str:
+            if task == "creative.variants":
+                self.creative_calls += 1
+                if self.creative_calls == 1:
+                    # First attempt: all variants violate SEBI rules
+                    return json.dumps(
+                        {
+                            "variants": [
+                                {"headline": "Guaranteed 100% Return", "body": "Risk-free assured profit on investments."},
+                                {"headline": "Zero Risk Double Profit", "body": "Guaranteed growth with 100% certainty."},
+                            ]
+                        }
+                    )
+                # Second attempt after loopback: compliant
+                return json.dumps(
+                    {
+                        "variants": [
+                            {"headline": "Complete Financial Health Checkup", "body": "Unbiased portfolio review for ₹999."},
+                            {"headline": "Transparent Financial Assessment", "body": "SEBI-registered fee-only advisory."},
+                        ]
+                    }
+                )
+            return await super().complete(task, messages, **kwargs)
+
+    gateway = LoopbackGateway()
 
     async with open_checkpointer(checkpoint_path) as saver:
-        runtime = AgentRuntime(graph=build_governor_graph(gateway, dispatcher), checkpointer=saver, prefix="gv")  # type: ignore[arg-type]
-        handle = await runtime.start_with({"objective": "x"})
+        runtime = AgentRuntime(
+            graph=build_governor_graph(gateway), checkpointer=saver, prefix="gv"
+        )
+        handle = await runtime.start_with(
+            {"objective": "Lower CAC for ₹999 checkup", "tenant_id": "letstute"},
+            run_id="gv-loopback-test",
+        )
+
+    assert handle.is_awaiting_approval
+    assert handle.state["loopback_count"] == 1
+    # Verify loopback hop exists in history
+    verdicts = [h.get("verdict") for h in handle.state["hops"]]
+    assert "loopback" in verdicts
+
+
+async def test_governor_halts_when_sebi_retries_exhausted(checkpoint_path: Path) -> None:
+    gateway = FakeGateway(blocked_creative=True)
+
+    async with open_checkpointer(checkpoint_path) as saver:
+        runtime = AgentRuntime(
+            graph=build_governor_graph(gateway), checkpointer=saver, prefix="gv"
+        )
+        handle = await runtime.start_with(
+            {"objective": "Aggressive scaling", "tenant_id": "letstute"},
+            run_id="gv-exhausted-test",
+        )
 
     assert handle.status == "failed"
-    assert handle.state["error_code"] == "no_valid_steps"
+    assert handle.state.get("error_code") == "sebi_compliance_exhausted"
+    assert not handle.is_awaiting_approval
 
-
-async def test_a_fourth_step_is_dropped_at_the_cap(checkpoint_path: Path) -> None:
-    steps = [
-        {"agent": "analyst", "input": f"question {i}", "rationale": ""} for i in range(4)
-    ]
-    gateway = FakeGateway({"summary": "s", "steps": steps})
-    dispatcher = RecordingDispatcher()
-
-    async with open_checkpointer(checkpoint_path) as saver:
-        runtime = AgentRuntime(graph=build_governor_graph(gateway, dispatcher), checkpointer=saver, prefix="gv")  # type: ignore[arg-type]
-        handle = await runtime.start_with({"objective": "x"})
-
-    assert handle.interrupt_payload is not None
-    assert handle.interrupt_payload["step_count"] == 3

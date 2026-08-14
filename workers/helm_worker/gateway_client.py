@@ -64,12 +64,14 @@ class GatewayClient:
         self,
         base_url: str,
         *,
-        timeout_seconds: float = 180.0,
+        timeout_seconds: float = 10.0,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._owns_client = client is None
-        self._client = client or httpx.AsyncClient(timeout=timeout_seconds)
+        self._client = client or httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=2.0, read=timeout_seconds, write=5.0, pool=5.0)
+        )
 
     async def ask(self, question: str, *, idempotency_key: str | None = None) -> GroundedAnswer:
         headers = {"Content-Type": "application/json"}

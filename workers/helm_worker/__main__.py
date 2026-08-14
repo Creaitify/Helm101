@@ -1,22 +1,13 @@
-"""Drive HELM's agent roster from the command line.
+"""Drive HELM's agent roster and Governor Star Topology relay from the command line.
 
-One verb per agent to start a run, one shared pair to decide and inspect:
+One verb per agent or full relay, one shared pair to decide and inspect:
 
+    python -m helm_worker govern "raise checkups 10% this month" # Star Topology Relay
     python -m helm_worker ask "what blocks live sign-in?"        # Analyst
     python -m helm_worker buy --objective "lower blended CAC"    # Media Buyer
     python -m helm_worker create "Diwali FHC push for parents"   # Creative
-    python -m helm_worker govern "raise checkups 10% this month" # Governor
     python -m helm_worker decide <run-id> --approve
     python -m helm_worker status <run-id>
-
-Run ids carry their agent as a prefix (an-, mb-, cr-, gv-), so `decide` and
-`status` route on the id alone. Between starting and deciding, the worker can
-be killed, rebooted or redeployed: the run lives in the checkpoint file, and
-the model is not called a second time on resume.
-
-The Governor's `decide --approve` dispatches its approved delegations as
-child runs — each of which pauses at its OWN approval gate and is decided
-with the same `decide` verb.
 """
 
 from __future__ import annotations
@@ -26,6 +17,8 @@ import asyncio
 import json
 import sys
 from typing import Any
+
+import httpx
 
 from helm_worker.agents.creative import build_creative_graph
 from helm_worker.agents.governor import build_governor_graph
@@ -49,57 +42,102 @@ def _handle_to_dict(handle: RunHandle) -> dict[str, Any]:
 
 
 def _print_handle(handle: RunHandle) -> None:
-    print(f"run      {handle.run_id}")
-    print(f"status   {handle.status}")
+    sep = "=" * 70
+    sub_sep = "-" * 70
 
-    if handle.is_awaiting_approval and handle.interrupt_payload is not None:
-        proposal = handle.interrupt_payload
-        print("\nAwaiting your decision:")
-        for key, value in proposal.items():
-            if key in {"run_id", "interrupt_id"}:
-                continue
-            print(f"  {key:12}{value}")
-        print(f"\n  python -m helm_worker decide {handle.run_id} --approve")
-        print(f"  python -m helm_worker decide {handle.run_id} --reject --reason '...'")
-        return
+    print(f"\n{sep}")
+    print(f"  HELM AGENT RUNTIME · RUN: {handle.run_id}")
+    status_label = handle.status.upper()
+    if handle.is_awaiting_approval:
+        status_label = "AWAITING HUMAN APPROVAL (PAUSED AT HITL GATE)"
+    print(f"  STATUS: {status_label}")
+    print(f"{sep}")
 
     state = handle.state
+    hops = state.get("hops", [])
+    if hops:
+        print(f"\n[STAR TOPOLOGY RELAY TIMELINE: {len(hops)} HOPS]")
+        for hop in hops:
+            idx = hop.get("hop_index", 0)
+            from_a = hop.get("from_agent", "?").upper()
+            to_a = hop.get("to_agent", "?").upper()
+            kind = hop.get("hop_kind", "")
+            verdict = hop.get("verdict", "").upper()
+            summary = hop.get("summary", "")
+            rationale = hop.get("governor_rationale", "")
+            print(f"  #{idx} [{from_a} -> {to_a}] ({kind}) [{verdict}]")
+            if summary:
+                print(f"     Summary: {summary}")
+            if rationale:
+                print(f"     Rationale: {rationale}")
+
+    # Analyst answer & citations
     answer = state.get("answer", "")
+    citations = state.get("citations", [])
     if answer:
-        print(f"\n{answer}\n")
-    for citation in state.get("citations", []):
-        print(f"  - {citation.get('doc')}:{citation.get('start_line')} § {citation.get('heading')}")
-    if state.get("analysis"):
-        print(f"\n{state['analysis']}\n")
-    for shift in state.get("shifts", []):
-        # ASCII arrow: Windows consoles default to cp1252, which cannot
-        # encode U+2192 — a run must never look failed because of a glyph.
-        print(
-            f"  [shift] {shift.get('campaign_id')}: "
-            f"{int(float(shift.get('current_budget', 0)))} -> {int(float(shift.get('proposed_budget', 0)))}"
-            f"  ({shift.get('reason', '')})"
-        )
-    for note in state.get("policy_notes", []) + state.get("validation_notes", []):
-        print(f"  [policy] {note}")
-    for variant, verdict in zip(state.get("variants", []), state.get("verdicts", []), strict=False):
-        matched = f" matched={verdict.get('matched')}" if verdict.get("matched") else ""
-        print(f"  [{verdict.get('status', '?'):5}] {variant.get('headline', '')} — {variant.get('body', '')}{matched}")
-    if state.get("plan_summary"):
-        print(f"\n{state['plan_summary']}\n")
-    for child in state.get("children", []):
-        print(f"  [child] {child.get('agent')}: {child.get('run_id')}")
-    for entry in state.get("execution_log", []):
-        print(f"  [executed] {entry}")
-    if state.get("error_code"):
-        print(f"  [error] {state['error_code']}")
-    print(f"\n[model calls] {state.get('model_calls', 0)}")
+        print(f"\n[ANALYST AUDIT FINDINGS]\n  {answer}")
+    if citations:
+        print("\n  Citations & Sources:")
+        for c in citations:
+            doc = c.get("doc") or c.get("source") or "platform_corpus"
+            line = c.get("start_line", "")
+            heading = c.get("heading") or c.get("label", "")
+            print(f"    • {doc}{f':{line}' if line else ''} § {heading}")
+
+    # Creative copy variants
+    variants = state.get("variants", [])
+    verdicts = state.get("verdicts", [])
+    if variants:
+        print(f"\n[CREATIVE DECK: {len(variants)} VARIANTS]")
+        for idx, (v, verd) in enumerate(zip(variants, verdicts if verdicts else [{}] * len(variants), strict=False), 1):
+            status = (verd.get("status") or "pass").upper()
+            matched = f" (Rule match: {verd.get('matched')})" if verd.get("matched") else ""
+            print(f"  Variant {idx} [{status}]: {v.get('headline', '')}")
+            print(f"    Body: {v.get('body', '')}{matched}")
+
+    # Media Buyer shifts
+    shifts = state.get("shifts", [])
+    if shifts:
+        print(f"\n[MEDIA BUYER BUDGET REALLOCATION: {len(shifts)} SHIFTS (±25% POLICY)]")
+        for s in shifts:
+            cid = s.get("campaign_id", "")
+            curr = int(float(s.get("current_budget", 0)))
+            prop = int(float(s.get("proposed_budget", 0)))
+            diff = prop - curr
+            diff_str = f"+₹{diff:,}" if diff > 0 else f"-₹{abs(diff):,}"
+            print(f"  • {cid:24} ₹{curr:,} -> ₹{prop:,} ({diff_str}) | {s.get('reason', '')}")
+
+    # Execution logs if completed / rejected
+    exec_log = state.get("execution_log", [])
+    if exec_log:
+        print("\n[EXECUTION LOG]")
+        for entry in exec_log:
+            print(f"  ✓ {entry}")
+
+    # HITL Gate interrupt prompt
+    if handle.is_awaiting_approval and handle.interrupt_payload is not None:
+        proposal = handle.interrupt_payload
+        print(f"\n{sub_sep}")
+        print("  HUMAN OPERATOR AUTHORIZATION REQUIRED")
+        print(f"{sub_sep}")
+        if proposal.get("summary"):
+            print(f"  Summary : {proposal['summary']}")
+        if proposal.get("action"):
+            print(f"  Action  : {proposal['action']}")
+        if proposal.get("checks"):
+            print("  Checks  : " + " | ".join(f"[{c.get('label')}: {c.get('status', '').upper()}]" for c in proposal["checks"]))
+
+        print(f"\n  To authorize or reject this run:")
+        print(f"    Approve: python -m helm_worker decide {handle.run_id} --approve")
+        print(f"    Reject : python -m helm_worker decide {handle.run_id} --reject --reason \"<optional reason>\"")
+
+    print(f"{sep}\n")
 
 
 async def _run(args: argparse.Namespace) -> int:
     settings = WorkerSettings()
-    configure_logging(settings.log_level)
-    # Fails closed if a provider key is present: a worker holding one would
-    # make the gateway optional, which is the guarantee this design rests on.
+    is_json = getattr(args, "json", False)
+    configure_logging(level=settings.log_level, json_logs=is_json)
     settings.assert_no_provider_credentials()
 
     gateway = GatewayClient(settings.helm_api_base_url, timeout_seconds=settings.request_timeout_seconds)
@@ -111,27 +149,35 @@ async def _run(args: argparse.Namespace) -> int:
             )
             creative = AgentRuntime(graph=build_creative_graph(gateway), checkpointer=checkpointer, prefix="cr")
 
-            async def dispatch(agent: str, task_input: str) -> str:
-                """Start a child run for the Governor. It pauses at its own gate."""
-
-                if agent == "analyst":
-                    return (await analyst.start(task_input)).run_id
-                if agent == "media_buyer":
-                    return (
-                        await media_buyer.start_with(
-                            {
-                                "objective": task_input,
-                                "campaigns": SAMPLE_CAMPAIGNS,
-                                "data_label": SAMPLE_LABEL,
-                            }
-                        )
-                    ).run_id
-                if agent == "creative":
-                    return (await creative.start_with({"brief": task_input})).run_id
-                raise ValueError(f"No runtime for agent {agent!r}")
+            async def step_recorder(envelope: dict[str, Any]) -> None:
+                """Record step envelope to FastAPI backend for audit and UI inspection."""
+                run_id = envelope.get("run_id")
+                if not run_id:
+                    return
+                url = f"{settings.helm_api_base_url}/api/v1/agents/runs/{run_id}/steps"
+                body = {
+                    "hop_index": envelope.get("hop_index", 0),
+                    "from_agent": envelope.get("from_agent", ""),
+                    "to_agent": envelope.get("to_agent", ""),
+                    "hop_kind": str(envelope.get("hop_kind", "")),
+                    "payload": envelope.get("payload", {}),
+                    "governor_rationale": envelope.get("governor_rationale", ""),
+                    "verdict": envelope.get("verdict", ""),
+                    "tokens_in": envelope.get("tokens_in", 0),
+                    "tokens_out": envelope.get("tokens_out", 0),
+                    "cost_micros": envelope.get("estimated_cost_micros", 0),
+                }
+                headers = {"Content-Type": "application/json", "X-HELM-Active-Tenant": envelope.get("tenant_id", "letstute")}
+                try:
+                    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=0.5, read=1.0, write=1.0, pool=1.0)) as client:
+                        await client.post(url, json=body, headers=headers)
+                except Exception:
+                    pass  # fail soft on network step logging
 
             governor = AgentRuntime(
-                graph=build_governor_graph(gateway, dispatch), checkpointer=checkpointer, prefix="gv"
+                graph=build_governor_graph(gateway, step_recorder=step_recorder),
+                checkpointer=checkpointer,
+                prefix="gv",
             )
 
             def runtime_for(run_id: str) -> AgentRuntime:
@@ -142,7 +188,6 @@ async def _run(args: argparse.Namespace) -> int:
                     "gv": governor,
                     "an": analyst,
                 }
-                # Pre-roster run ids were bare UUIDs from the Analyst.
                 return by_prefix.get(prefix, analyst)
 
             if args.command == "pending":
@@ -206,16 +251,12 @@ async def _run(args: argparse.Namespace) -> int:
             print(json.dumps({"error": error.code, "message": str(error)}), file=sys.stderr)
         else:
             print(f"[gateway] {error.code}: {error}", file=sys.stderr)
-            print("Is the API running?  cd api && ./.venv/Scripts/uvicorn app.main:app --port 8000", file=sys.stderr)
         return 2
     finally:
         await gateway.aclose()
 
 
 def main(argv: list[str] | None = None) -> int:
-    # Model output is printed verbatim and can contain any Unicode; Windows
-    # consoles default to cp1252, and a completed run must never look failed
-    # because a glyph could not be encoded.
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
@@ -244,7 +285,7 @@ def main(argv: list[str] | None = None) -> int:
     create.add_argument("brief")
     create.add_argument("--run-id", default=None)
 
-    govern = commands.add_parser("govern", help="Governor: plan delegations across the roster.", parents=[json_parent])
+    govern = commands.add_parser("govern", help="Governor Star Topology Relay: orchestrates AN -> GV -> CR -> GV -> MB -> GV -> HITL.", parents=[json_parent])
     govern.add_argument("objective")
     govern.add_argument("--run-id", default=None)
 
