@@ -21,6 +21,12 @@ from app.auth.principal import Principal
 from app.db.repositories.agent_steps import AgentStepsRepository
 from app.gateway.contracts import CompletionRequest, Message, Role, TaskKind
 from app.gateway.errors import GatewayError
+from app.gateway.policy import (
+    AVAILABLE_MODELS,
+    ROUTING_TABLE,
+    get_model_override,
+    set_model_override,
+)
 from app.gateway.service import GatewayService
 
 router = APIRouter(tags=["agents"])
@@ -158,6 +164,83 @@ async def list_run_steps(
     tenant_id = str(principal.tenant_id)
     steps = _steps_repo.list_steps(tenant_id=tenant_id, run_id=run_id)
     return [StepOut(**s) for s in steps]
+
+
+class ModelOptionOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    label: str
+    tier: str
+    input_per_mtok_usd: float
+    output_per_mtok_usd: float
+    note: str
+
+
+class ModelsOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    active: str | None
+    default_by_task: dict[str, str]
+    available: list[ModelOptionOut]
+
+
+class SetModelIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # None clears the override, restoring the per-task routing table defaults.
+    model: str | None = None
+
+
+class UnknownModel(GatewayError):
+    status_code = 422
+    code = "unknown_model"
+    detail = "The requested model is not in the switchable roster."
+
+
+def _models_out() -> ModelsOut:
+    return ModelsOut(
+        active=get_model_override(),
+        default_by_task={task.value: policy.model.model for task, policy in ROUTING_TABLE.items()},
+        available=[
+            ModelOptionOut(
+                id=option.id,
+                label=option.label,
+                tier=option.tier,
+                input_per_mtok_usd=option.input_per_mtok_usd,
+                output_per_mtok_usd=option.output_per_mtok_usd,
+                note=option.note,
+            )
+            for option in AVAILABLE_MODELS
+        ],
+    )
+
+
+@router.get(
+    "/agents/models",
+    response_model=ModelsOut,
+    summary="List switchable models and the active override",
+)
+async def list_models(
+    principal: Principal = Depends(current_principal),
+) -> ModelsOut:
+    return _models_out()
+
+
+@router.put(
+    "/agents/models",
+    response_model=ModelsOut,
+    summary="Set (or clear) the model every agent task routes to",
+)
+async def set_model(
+    body: SetModelIn,
+    principal: Principal = Depends(current_principal),
+) -> ModelsOut:
+    try:
+        set_model_override(body.model)
+    except KeyError:
+        raise UnknownModel from None
+    return _models_out()
 
 
 @router.post(

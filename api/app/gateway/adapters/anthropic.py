@@ -110,7 +110,14 @@ class AnthropicAdapter:
 
     def _build_payload(self, request: CompletionRequest, policy: TaskPolicy) -> dict[str, Any]:
         capabilities = policy.capabilities
-        max_tokens = min(request.max_tokens, capabilities.max_output_tokens)
+        # The policy's per-task cap is the spend authority, not a suggestion: a
+        # caller asking for more tokens than the task warrants is clamped here,
+        # so cost control does not depend on every call site remembering it.
+        max_tokens = min(
+            request.max_tokens,
+            policy.default_max_tokens,
+            capabilities.max_output_tokens,
+        )
 
         payload: dict[str, Any] = {
             "model": policy.model.model,
@@ -126,7 +133,9 @@ class AnthropicAdapter:
 
         output_config: dict[str, Any] = {}
         if capabilities.supports_effort:
-            output_config["effort"] = request.effort.value
+            # Same principle for reasoning depth: the routing table decided how
+            # much thinking each task deserves; a caller cannot bid it up.
+            output_config["effort"] = policy.default_effort.value
         if request.json_schema is not None:
             output_config["format"] = {"type": "json_schema", "schema": dict(request.json_schema)}
         if output_config:

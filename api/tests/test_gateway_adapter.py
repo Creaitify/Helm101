@@ -103,10 +103,17 @@ def test_the_payload_never_ends_with_an_assistant_turn(adapter: AnthropicAdapter
     assert payload["output_config"]["format"]["type"] == "json_schema"
 
 
-def test_effort_is_sent_to_a_model_that_accepts_it(adapter: AnthropicAdapter) -> None:
-    payload = adapter._build_payload(_request(effort=Effort.XHIGH), resolve(TaskKind.ANALYST_ANSWER))
+def test_effort_comes_from_the_policy_not_the_caller(adapter: AnthropicAdapter) -> None:
+    """The routing table decides reasoning depth; a caller cannot bid it up.
 
-    assert payload["output_config"]["effort"] == "xhigh"
+    The request asks for XHIGH, but the task's policy says otherwise — the
+    policy value is what reaches the provider, keeping spend predictable.
+    """
+
+    policy = resolve(TaskKind.ANALYST_ANSWER)
+    payload = adapter._build_payload(_request(effort=Effort.XHIGH), policy)
+
+    assert payload["output_config"]["effort"] == policy.default_effort.value
 
 
 def test_effort_is_withheld_from_a_model_that_rejects_it(adapter: AnthropicAdapter) -> None:
@@ -124,13 +131,21 @@ def test_effort_is_withheld_from_a_model_that_rejects_it(adapter: AnthropicAdapt
     assert "effort" not in payload.get("output_config", {})
 
 
-def test_max_tokens_is_clamped_to_the_model_ceiling(adapter: AnthropicAdapter) -> None:
+def test_max_tokens_is_clamped_to_the_policy_cap(adapter: AnthropicAdapter) -> None:
+    """A caller asking for millions of tokens gets the task's budget instead.
+
+    The clamp is min(request, policy cap, model ceiling) — the policy cap is
+    what makes per-task spend a config decision rather than a call-site hope.
+    """
+
+    policy = resolve(TaskKind.ANALYST_ROUTE)
     payload = adapter._build_payload(
         _request(task=TaskKind.ANALYST_ROUTE, max_tokens=10_000_000),
-        resolve(TaskKind.ANALYST_ROUTE),
+        policy,
     )
 
-    assert payload["max_tokens"] == 64_000
+    assert payload["max_tokens"] == policy.default_max_tokens
+    assert payload["max_tokens"] <= policy.capabilities.max_output_tokens
 
 
 def test_the_cache_breakpoint_sits_on_the_stable_prefix(adapter: AnthropicAdapter) -> None:
@@ -162,7 +177,7 @@ async def test_a_successful_response_is_translated_to_the_contract(adapter: Anth
 
     assert response.text == "The Auth0 API registration is missing."
     assert response.stop_reason is StopReason.END_TURN
-    assert response.model.model == "claude-opus-5"
+    assert response.model.model == resolve(TaskKind.ANALYST_ANSWER).model.model
     assert response.usage.input_tokens == 1200
     assert response.usage.output_tokens == 300
     # Recorded rather than inferred: it is the only honest confirmation that

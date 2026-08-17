@@ -79,7 +79,13 @@ class GatewayService:
         estimate = estimate_micros(
             policy.model.model,
             prompt_tokens=self._estimate_prompt_tokens(request),
-            max_tokens=min(request.max_tokens, policy.capabilities.max_output_tokens),
+            # Mirrors the adapter's clamp so the reservation prices the tokens
+            # the provider can actually be asked for, not the caller's wish.
+            max_tokens=min(
+                request.max_tokens,
+                policy.default_max_tokens,
+                policy.capabilities.max_output_tokens,
+            ),
         )
 
         reservation = await self._ledger.reserve(

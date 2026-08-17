@@ -2780,6 +2780,20 @@ tbody tr:hover{background:var(--card-2)}
   border-top: 1px solid var(--line);
 }
 
+.agent-model-picker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.agent-model-picker select {
+  background: var(--bg-2, var(--bg));
+  color: inherit;
+  border: 1px solid var(--line);
+  max-width: 300px;
+}
+
 .agent-input-note {
   display: flex;
   align-items: center;

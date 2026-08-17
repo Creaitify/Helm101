@@ -20,7 +20,12 @@ async def test_health_is_alive_and_returns_request_id(app: FastAPI) -> None:
         response = await client.get("/api/v1/health", headers={"X-Request-Id": "test-request-123"})
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "service": "HELM API Test"}
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["service"] == "HELM API Test"
+    # "live" with a provider key, "replay" without one — either way the field
+    # must be present so operators can tell which mode is serving completions.
+    assert body["gateway"] in {"live", "replay"}
     assert response.headers["x-request-id"] == "test-request-123"
 
 

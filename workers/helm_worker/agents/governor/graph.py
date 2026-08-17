@@ -21,8 +21,8 @@ from langgraph.types import interrupt
 
 from helm_worker.agents.creative.compliance import check as check_sebi_compliance
 from helm_worker.agents.governor.state import GovernorState
-from helm_worker.agents.media_buyer.data import SAMPLE_CAMPAIGNS
 from helm_worker.agents.media_buyer.policy import apply_policy
+from helm_worker.data_sources import generate_synthetic_campaigns, resolve_campaigns
 from helm_worker.envelope import (
     AnalystFindingsPayload,
     BudgetProposalPayload,
@@ -117,7 +117,12 @@ def build_governor_graph(
         run_id = state.get("run_id", "gv-run")
         tenant_id = state.get("tenant_id", "letstute")
         objective = state.get("objective", "Optimize CAC and ad conversions")
-        
+
+        # Resolve this run's campaign snapshot once: live ads data when
+        # credentials are configured, otherwise a fresh synthetic session.
+        snapshot = resolve_campaigns(run_id=run_id)
+        logger.info("governor.data_resolved", run_id=run_id, mode=snapshot.mode, label=snapshot.label)
+
         # Dynamic Intent Decomposition
         plan_summary = f"Governor strategy plan for: '{objective}'"
         directives = {
@@ -176,6 +181,9 @@ def build_governor_graph(
             "next_agent": "governor",
             "plan": plan_payload.model_dump(mode="json"),
             "required_agents": ["analyst", "creative", "media_buyer"],
+            "campaign_snapshot": snapshot.campaigns,
+            "data_label": snapshot.label,
+            "data_mode": snapshot.mode,
         }
 
     async def governor(state: GovernorState) -> dict[str, Any]:
@@ -321,14 +329,24 @@ def build_governor_graph(
                 blocked_count=0,
             )
 
-            # Synthesize media package using Analyst insights
+            # Synthesize media package from this run's actual campaign snapshot
+            campaigns = state.get("campaign_snapshot") or generate_synthetic_campaigns()
+            by_roas = sorted(campaigns, key=lambda c: float(c.get("roas", 0) or 0), reverse=True)
+            top_converter = by_roas[0] if by_roas else {"id": "fhc-meta-retargeting", "roas": 3.4}
+            worst = by_roas[-1] if by_roas else {"id": "search-competitor", "cac": 550}
+
             media_pkg = MediaPackagePayload(
                 creative_deck=deck_payload,
-                target_campaigns=["fhc-meta-retargeting", "fhc-meta-prospecting", "search-brand", "search-competitor"],
-                channel_priorities=["Meta Retargeting (High ROAS)", "Meta Prospecting (Scale)", "Google Search (Efficiency)"],
+                target_campaigns=[str(c.get("id", "")) for c in campaigns],
+                channel_priorities=[
+                    f"{c.get('name', c.get('id'))} ({c.get('roas')}x ROAS, ₹{c.get('cac')} CAC)"
+                    for c in by_roas[:3]
+                ],
                 governor_instructions=(
-                    f"Reallocate spend towards top converter ('fhc-meta-retargeting') and scale down fatigued channels "
-                    f"under strict ±25% policy caps to achieve: {objective}."
+                    f"Reallocate spend towards top converter ('{top_converter.get('id')}', "
+                    f"{top_converter.get('roas')}x ROAS) and trim the weakest channel "
+                    f"('{worst.get('id')}', ₹{worst.get('cac')} CAC) under strict ±25% policy caps "
+                    f"to achieve: {objective}."
                 ),
             )
 
@@ -621,20 +639,62 @@ def build_governor_graph(
         """Media Buyer specialist: calculates budget shifts under strict ±25% caps."""
         run_id = state.get("run_id", "mb-run")
         pkg = state.get("media_package", {})
-        framed_pkg = frame_as_data_block("media_package_input", pkg, "Media Package from Governor")
-        logger.info("media_buyer.executing", run_id=run_id)
+        campaigns = state.get("campaign_snapshot") or generate_synthetic_campaigns()
+        logger.info("media_buyer.executing", run_id=run_id, data_label=state.get("data_label", ""))
 
+        # The model sees exactly the data it must reason over — the campaign
+        # table with real numbers — and nothing it doesn't need (the creative
+        # deck is irrelevant to budget math and would only burn input tokens).
+        prompt_data = {
+            "objective": state.get("objective", ""),
+            "governor_instructions": pkg.get("governor_instructions", ""),
+            "data_label": state.get("data_label", ""),
+            "campaigns": [
+                {
+                    "id": c.get("id"),
+                    "daily_budget": c.get("daily_budget"),
+                    "cac": c.get("cac"),
+                    "roas": c.get("roas"),
+                    "results_30d": c.get("results_30d"),
+                }
+                for c in campaigns
+            ],
+        }
+        framed_pkg = frame_as_data_block("media_package_input", prompt_data, "Media Package from Governor")
+
+        # Deterministic fallback derived from the snapshot: scale the best
+        # ROAS campaign with budget freed from the worst, inside the caps.
+        by_roas = sorted(campaigns, key=lambda c: float(c.get("roas", 0) or 0), reverse=True)
+        best = by_roas[0] if by_roas else {}
+        worst = by_roas[-1] if by_roas else {}
+        best_budget = float(best.get("daily_budget", 40_000) or 40_000)
+        worst_budget = float(worst.get("daily_budget", 30_000) or 30_000)
+        shift_amount = round(min(best_budget, worst_budget) * 0.25)
         raw_shifts = [
-            {"campaign_id": "fhc-meta-retargeting", "proposed_budget": 50000, "reason": "High conversion velocity on ₹999 checkups"},
-            {"campaign_id": "search-competitor", "proposed_budget": 20000, "reason": "Shift underperforming budget to Meta retargeting"},
+            {
+                "campaign_id": str(best.get("id", "fhc-meta-retargeting")),
+                "proposed_budget": best_budget + shift_amount,
+                "reason": f"Scale top converter ({best.get('roas', '?')}x ROAS)",
+            },
+            {
+                "campaign_id": str(worst.get("id", "search-competitor")),
+                "proposed_budget": worst_budget - shift_amount,
+                "reason": f"Trim weakest channel (₹{worst.get('cac', '?')} CAC)",
+            },
         ]
-        analysis_text = "Reallocated spend from fatigued search into high-ROAS Meta retargeting within ±25% policy caps."
+        analysis_text = "Reallocated spend from the weakest channel into the top ROAS converter within ±25% policy caps."
 
         try:
             text = await gateway.complete(
                 "media_buyer.proposal",
                 [{"role": "user", "content": framed_pkg}],
-                system="You are HELM's Media Buyer. Reallocate daily ad spend within strict ±25% caps and budget conservation. Return a JSON object with 'shifts' array and 'analysis' string.",
+                system=(
+                    "You are HELM's Media Buyer. Propose daily-budget shifts for the campaigns "
+                    "in the data block, using only their listed ids. Hard rules enforced in code "
+                    "after you answer: each budget moves at most ±25%, and the total across your "
+                    "shifts cannot grow — fund every raise with cuts. Justify each shift from the "
+                    "given CAC/ROAS numbers in one short sentence. Return JSON only."
+                ),
                 json_schema=SHIFTS_SCHEMA,
                 idempotency_key=f"run:{run_id}:media_buyer",
             )
@@ -657,17 +717,26 @@ def build_governor_graph(
         except Exception:
             pass
 
-        # Apply deterministic policy engine in code
-        policy_res = apply_policy(SAMPLE_CAMPAIGNS, raw_shifts)
+        # Apply deterministic policy engine in code, against this run's snapshot
+        policy_res = apply_policy(campaigns, raw_shifts)
         shifts = [dict(s) for s in policy_res.shifts]
 
-        # Policy Fallback Resilience: ensure at least one valid balanced shift exists
+        # Policy Fallback Resilience: if the model's shifts all failed policy,
+        # fall back to the snapshot-derived best/worst rebalance computed above.
         if not shifts:
             fallback_shifts = [
-                {"campaign_id": "fhc-meta-retargeting", "proposed_budget": 50000, "reason": "Scale top ROAS converter (3.4x ROAS)"},
-                {"campaign_id": "search-competitor", "proposed_budget": 20000, "reason": "Trim fatigued competitor search (₹550 CAC)"},
+                {
+                    "campaign_id": str(best.get("id", "fhc-meta-retargeting")),
+                    "proposed_budget": best_budget + shift_amount,
+                    "reason": f"Scale top ROAS converter ({best.get('roas', '?')}x ROAS)",
+                },
+                {
+                    "campaign_id": str(worst.get("id", "search-competitor")),
+                    "proposed_budget": worst_budget - shift_amount,
+                    "reason": f"Trim weakest channel (₹{worst.get('cac', '?')} CAC)",
+                },
             ]
-            policy_res = apply_policy(SAMPLE_CAMPAIGNS, fallback_shifts)
+            policy_res = apply_policy(campaigns, fallback_shifts)
             shifts = [dict(s) for s in policy_res.shifts]
 
         total_moved = sum(abs(float(s["proposed_budget"]) - float(s["current_budget"])) for s in shifts)

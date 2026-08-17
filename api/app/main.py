@@ -176,6 +176,10 @@ def _install_analyst(application: FastAPI, settings: Settings) -> None:
     application.state.analyst = AnalystService(
         gateway=gateway,
         source=MarkdownFileSource(settings.resolve_knowledge_root()),
+        # Token thrift: six focused sections is enough to ground an answer on
+        # this corpus; every extra section is uncached input billed per call.
+        section_limit=6,
+        token_budget=4_500,
     )
 
 

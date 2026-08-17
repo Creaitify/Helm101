@@ -19,6 +19,10 @@ class GovernorState(TypedDict, total=False):
     # Dynamic Planning & Delegation
     plan: dict[str, Any] | None
     required_agents: list[str] | None
+    # Campaign data snapshot for this run: synthetic per-session or live ads data
+    campaign_snapshot: list[dict[str, Any]] | None
+    data_label: str
+    data_mode: str
     # Intermediate payloads per specialist
     analyst_findings: dict[str, Any] | None
     creative_brief: dict[str, Any] | None

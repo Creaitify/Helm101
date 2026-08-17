@@ -2,16 +2,20 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
-const { executeAgent, decideAgent, inspectAgent } = vi.hoisted(() => ({
+const { executeAgent, decideAgent, inspectAgent, getModelConfig, setActiveModel } = vi.hoisted(() => ({
   executeAgent: vi.fn(),
   decideAgent: vi.fn(),
   inspectAgent: vi.fn(),
+  getModelConfig: vi.fn().mockResolvedValue({ ok: true, active: null, defaultByTask: {}, available: [] }),
+  setActiveModel: vi.fn().mockResolvedValue({ ok: true, active: null, defaultByTask: {}, available: [] }),
 }))
 
 vi.mock('@/app/(app)/agents/actions', () => ({
   executeAgent,
   decideAgent,
   inspectAgent,
+  getModelConfig,
+  setActiveModel,
 }))
 
 import { AgentConsole } from '@/app/(app)/agents/AgentConsole'

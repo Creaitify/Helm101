@@ -6,17 +6,21 @@ import { AgentConsole } from '@/app/(app)/agents/AgentConsole'
 import { StudioView } from '@/app/(app)/studio/StudioView'
 import * as studioActions from '@/app/(app)/studio/actions'
 
-const { executeAgent, decideAgent, inspectAgent, askWorkspaceQuestion } = vi.hoisted(() => ({
+const { executeAgent, decideAgent, inspectAgent, askWorkspaceQuestion, getModelConfig, setActiveModel } = vi.hoisted(() => ({
   executeAgent: vi.fn(),
   decideAgent: vi.fn(),
   inspectAgent: vi.fn(),
   askWorkspaceQuestion: vi.fn(),
+  getModelConfig: vi.fn().mockResolvedValue({ ok: true, active: null, defaultByTask: {}, available: [] }),
+  setActiveModel: vi.fn().mockResolvedValue({ ok: true, active: null, defaultByTask: {}, available: [] }),
 }))
 
 vi.mock('@/app/(app)/agents/actions', () => ({
   executeAgent,
   decideAgent,
   inspectAgent,
+  getModelConfig,
+  setActiveModel,
 }))
 
 vi.mock('@/app/(app)/workspace/actions', () => ({

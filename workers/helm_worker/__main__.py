@@ -23,7 +23,7 @@ import httpx
 from helm_worker.agents.creative import build_creative_graph
 from helm_worker.agents.governor import build_governor_graph
 from helm_worker.agents.media_buyer import build_media_buyer_graph
-from helm_worker.agents.media_buyer.data import SAMPLE_CAMPAIGNS, SAMPLE_LABEL
+from helm_worker.data_sources import resolve_campaigns
 from helm_worker.checkpoint import open_checkpointer
 from helm_worker.config import WorkerSettings
 from helm_worker.gateway_client import GatewayCallFailed, GatewayClient
@@ -227,13 +227,19 @@ async def _run(args: argparse.Namespace) -> int:
             if args.command == "ask":
                 handle = await analyst.start(args.question, run_id=args.run_id)
             elif args.command == "buy":
+                snapshot = resolve_campaigns(run_id=args.run_id or "mb-adhoc")
                 initial: dict[str, Any] = {
                     "objective": args.objective,
-                    "campaigns": SAMPLE_CAMPAIGNS,
-                    "data_label": SAMPLE_LABEL,
+                    "campaigns": snapshot.campaigns,
+                    "data_label": snapshot.label,
                 }
                 if not getattr(args, "json", False):
-                    print(f"[data] {SAMPLE_LABEL} — synthetic sample campaigns, not a live ad account")
+                    if snapshot.mode == "live":
+                        print(f"[data] {snapshot.label} — live ad account data")
+                    else:
+                        print(f"[data] {snapshot.label} — synthetic session data, not a live ad account")
+                    for note in snapshot.notes:
+                        print(f"[data] note: {note}")
                 handle = await media_buyer.start_with(initial, run_id=args.run_id)
             elif args.command == "create":
                 handle = await creative.start_with({"brief": args.brief}, run_id=args.run_id)

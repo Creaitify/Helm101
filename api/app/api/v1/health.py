@@ -17,6 +17,10 @@ class HealthResponse(BaseModel):
 
     status: Literal["ok"]
     service: str
+    # "live" when a provider key is configured, "replay" when canned fixtures
+    # serve completions. Surfaced so an operator can tell at a glance whether
+    # agents are really thinking or replaying recordings.
+    gateway: str = "unknown"
 
 
 class ReadinessResponse(BaseModel):
@@ -39,7 +43,11 @@ class VersionResponse(BaseModel):
 async def health(request: Request) -> HealthResponse:
     """Confirm that the API process is serving requests."""
 
-    return HealthResponse(status="ok", service=request.app.state.settings.app_name)
+    return HealthResponse(
+        status="ok",
+        service=request.app.state.settings.app_name,
+        gateway=str(getattr(request.app.state, "gateway_mode", "unknown")),
+    )
 
 
 @router.get("/ready", response_model=ReadinessResponse, summary="Stage 1 readiness")

@@ -9,6 +9,7 @@ be revalidated at release time.
 Rates as published 2026-08-12, per million tokens:
 
     claude-opus-5      $5 in  / $25 out
+    claude-sonnet-5    $3 in  / $15 out (sticker; intro pricing not assumed)
     claude-haiku-4-5   $1 in  / $5  out
 
 A cache read costs a tenth of the input rate; a cache write costs 1.25x.
@@ -41,6 +42,10 @@ RATE_CARD: dict[str, ModelRate] = {
     "claude-opus-5": ModelRate(
         input_micros_per_mtok=5 * _MICROS_PER_DOLLAR,
         output_micros_per_mtok=25 * _MICROS_PER_DOLLAR,
+    ),
+    "claude-sonnet-5": ModelRate(
+        input_micros_per_mtok=3 * _MICROS_PER_DOLLAR,
+        output_micros_per_mtok=15 * _MICROS_PER_DOLLAR,
     ),
     "claude-haiku-4-5": ModelRate(
         input_micros_per_mtok=1 * _MICROS_PER_DOLLAR,

@@ -5,7 +5,16 @@ import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
-import { executeAgent, decideAgent, inspectAgent, type AgentKind, type AgentActionResponse } from './actions'
+import {
+  executeAgent,
+  decideAgent,
+  inspectAgent,
+  getModelConfig,
+  setActiveModel,
+  type AgentKind,
+  type AgentActionResponse,
+  type ModelConfig,
+} from './actions'
 import type { HandoffEnvelope } from '@/lib/types'
 import {
   CheckCircle2,
@@ -108,8 +117,32 @@ export function AgentConsole() {
   const [rejectReason, setRejectReason] = useState('')
   const [showRejectInput, setShowRejectInput] = useState(false)
   const [selectedEnvelope, setSelectedEnvelope] = useState<HandoffEnvelope | null>(null)
+  const [modelConfig, setModelConfig] = useState<ModelConfig | null>(null)
+  const [switchingModel, setSwitchingModel] = useState(false)
 
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // Load the switchable model roster once
+  useEffect(() => {
+    let cancelled = false
+    getModelConfig().then((cfg) => {
+      if (!cancelled) setModelConfig(cfg)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  async function handleModelChange(modelId: string) {
+    if (switchingModel) return
+    setSwitchingModel(true)
+    try {
+      const cfg = await setActiveModel(modelId === '__default__' ? null : modelId)
+      setModelConfig(cfg)
+    } finally {
+      setSwitchingModel(false)
+    }
+  }
 
   // Pre-fill objective from searchParams if navigated from Workspace
   useEffect(() => {
@@ -304,6 +337,30 @@ export function AgentConsole() {
             <ShieldCheck width={14} height={14} color="var(--emerald-2)" />
             <span>State checkpointed at every step. Model calls are never repeated on resume.</span>
           </div>
+          {modelConfig && modelConfig.available.length > 0 && (
+            <div className="agent-model-picker" title={
+              modelConfig.active
+                ? (modelConfig.available.find((m) => m.id === modelConfig.active)?.note || '')
+                : 'Per-task defaults from the routing table (Sonnet for agents, Haiku for routing)'
+            }>
+              <Cpu width={13} height={13} style={{ opacity: 0.7 }} />
+              <label htmlFor="agent-model-select" style={{ fontSize: 11, opacity: 0.75 }}>Model</label>
+              <select
+                id="agent-model-select"
+                value={modelConfig.active ?? '__default__'}
+                disabled={switchingModel || busy}
+                onChange={(e) => handleModelChange(e.target.value)}
+                style={{ fontSize: 12, padding: '4px 8px', borderRadius: 6 }}
+              >
+                <option value="__default__">Auto (per-task default)</option>
+                {modelConfig.available.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label} · ${m.input_per_mtok_usd}/${m.output_per_mtok_usd} per MTok
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <Button
             variant="primary"
             className={`btn-agent-dispatch ${selectedAgent.kind === 'governor' ? 'btn-governor-dispatch' : ''}`}
