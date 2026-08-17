@@ -65,31 +65,45 @@ export class AdPlatformRouter {
           if (process.env.META_ACCESS_TOKEN) {
             await this.meta.applyBudgetShift({
               campaignId: shift.campaign_id,
-              newDailyBudget: shift.proposed_budget * 100,  // convert to micros
+              newDailyBudget: Math.round(shift.proposed_budget * 100),  // convert INR Rupees to paise (currency minor units)
               currency: 'INR',
             })
+            results.push({
+              campaignId: shift.campaign_id,
+              platform,
+              action: `budget_shift -> ₹${shift.proposed_budget.toLocaleString('en-IN')}/day (live mode)`,
+              success: true,
+            })
+          } else {
+            results.push({
+              campaignId: shift.campaign_id,
+              platform,
+              action: `budget_shift -> ₹${shift.proposed_budget.toLocaleString('en-IN')}/day (sandbox mode)`,
+              success: true,
+            })
           }
-          results.push({
-            campaignId: shift.campaign_id,
-            platform,
-            action: `budget_shift -> ₹${shift.proposed_budget.toLocaleString('en-IN')}/day (sandbox mode)`,
-            success: true,
-          })
         } else if (platform === 'google') {
           if (process.env.GOOGLE_ADS_DEVELOPER_TOKEN) {
             await this.google.applyBudgetShift({
               campaignId: shift.campaign_id,
               campaignBudgetId: `budget-${shift.campaign_id}`,
-              newDailyBudget: shift.proposed_budget * 1_000_000,
+              newDailyBudget: Math.round(shift.proposed_budget * 1_000_000),  // convert INR Rupees to micros
               currency: 'INR',
             })
+            results.push({
+              campaignId: shift.campaign_id,
+              platform,
+              action: `budget_shift -> ₹${shift.proposed_budget.toLocaleString('en-IN')}/day (live mode)`,
+              success: true,
+            })
+          } else {
+            results.push({
+              campaignId: shift.campaign_id,
+              platform,
+              action: `budget_shift -> ₹${shift.proposed_budget.toLocaleString('en-IN')}/day (sandbox mode)`,
+              success: true,
+            })
           }
-          results.push({
-            campaignId: shift.campaign_id,
-            platform,
-            action: `budget_shift -> ₹${shift.proposed_budget.toLocaleString('en-IN')}/day (sandbox mode)`,
-            success: true,
-          })
         } else {
           results.push({
             campaignId: shift.campaign_id,
@@ -117,6 +131,7 @@ export class AdPlatformRouter {
    * Deploy approved creative variants to target campaigns.
    * Routes to Meta or Google based on campaign channel.
    * Runs in sandbox / dry-run mode when live credentials are not set.
+   * Ensures Google RSA constraints (>=3 headlines, >=2 descriptions) are satisfied.
    */
   async deployCreatives(
     variants: CreativeVariant[],
@@ -136,29 +151,54 @@ export class AdPlatformRouter {
                 headline: variant.headline,
                 body: variant.body,
               })
+              results.push({
+                campaignId,
+                platform,
+                action: `deploy_creative -> "${variant.headline.slice(0, 24)}…" (live mode)`,
+                success: true,
+              })
+            } else {
+              results.push({
+                campaignId,
+                platform,
+                action: `deploy_creative -> "${variant.headline.slice(0, 24)}…" (sandbox mode)`,
+                success: true,
+              })
             }
-            results.push({
-              campaignId,
-              platform,
-              action: `deploy_creative -> "${variant.headline.slice(0, 24)}…" (sandbox mode)`,
-              success: true,
-            })
           } else if (platform === 'google') {
+            // Google Ads Responsive Search Ads (RSA) strictly require >= 3 headlines and >= 2 descriptions
+            const headlines = [
+              variant.headline.slice(0, 30),
+              'Certified SEBI Planners',
+              '₹999 Portfolio Checkup',
+            ]
+            const descriptions = [
+              variant.body.slice(0, 90),
+              'Transparent fee-only wealth and portfolio roadmap. Zero commissions.',
+            ]
+
             if (process.env.GOOGLE_ADS_DEVELOPER_TOKEN) {
               await this.google.createResponsiveSearchAd({
                 customerId: process.env.GOOGLE_ADS_CUSTOMER_ID || '',
                 adGroupId: `ag-${campaignId}`,
-                headlines: [variant.headline],
-                descriptions: [variant.body.slice(0, 90)],
+                headlines,
+                descriptions,
                 finalUrl: 'https://finnovate.in/fhc',
               })
+              results.push({
+                campaignId,
+                platform,
+                action: `deploy_creative -> "${variant.headline.slice(0, 24)}…" (live mode)`,
+                success: true,
+              })
+            } else {
+              results.push({
+                campaignId,
+                platform,
+                action: `deploy_creative -> "${variant.headline.slice(0, 24)}…" (sandbox mode)`,
+                success: true,
+              })
             }
-            results.push({
-              campaignId,
-              platform,
-              action: `deploy_creative -> "${variant.headline.slice(0, 24)}…" (sandbox mode)`,
-              success: true,
-            })
           } else {
             results.push({
               campaignId,

@@ -39,6 +39,61 @@ from helm_worker.sanitizer import frame_as_data_block
 
 logger = structlog.get_logger(__name__)
 
+PLAN_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "required": ["plan_summary", "directives"],
+    "properties": {
+        "plan_summary": {"type": "string"},
+        "directives": {
+            "type": "object",
+            "required": ["analyst", "creative", "media_buyer"],
+            "properties": {
+                "analyst": {"type": "string"},
+                "creative": {"type": "string"},
+                "media_buyer": {"type": "string"},
+            },
+        },
+    },
+}
+
+VARIANTS_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "required": ["variants"],
+    "properties": {
+        "variants": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["headline", "body"],
+                "properties": {
+                    "headline": {"type": "string"},
+                    "body": {"type": "string"},
+                },
+            },
+        },
+    },
+}
+
+SHIFTS_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "required": ["shifts"],
+    "properties": {
+        "analysis": {"type": "string"},
+        "shifts": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["campaign_id", "proposed_budget", "reason"],
+                "properties": {
+                    "campaign_id": {"type": "string"},
+                    "proposed_budget": {"type": "number"},
+                    "reason": {"type": "string"},
+                },
+            },
+        },
+    },
+}
+
 # Step Recorder callable for persistence: (envelope) -> None
 StepRecorder = Callable[[dict[str, Any]], Awaitable[None]] | None
 
@@ -74,13 +129,22 @@ def build_governor_graph(
         try:
             plan_raw = await gateway.complete(
                 "governor.plan",
-                [{"role": "user", "content": f"Create an orchestration plan for: {objective}"}],
-                system="You are HELM's Governor. Decompose the marketing objective into coordinated specialist directives.",
+                [{"role": "user", "content": f"Create an orchestration plan for marketing objective: '{objective}'. You must return a JSON object adhering to the schema."}],
+                system="You are HELM's Governor. Decompose the marketing objective into coordinated specialist directives. You must respond with valid JSON adhering to the schema.",
+                json_schema=PLAN_SCHEMA,
                 idempotency_key=f"run:{run_id}:plan",
             )
             parsed = json.loads(plan_raw)
-            if isinstance(parsed, dict) and "plan_summary" in parsed:
-                plan_summary = str(parsed["plan_summary"])
+            if isinstance(parsed, dict):
+                if "plan_summary" in parsed and parsed["plan_summary"]:
+                    plan_summary = str(parsed["plan_summary"])
+                if "directives" in parsed and isinstance(parsed["directives"], dict):
+                    dirs = parsed["directives"]
+                    directives = {
+                        "analyst": str(dirs.get("analyst", directives["analyst"])),
+                        "creative": str(dirs.get("creative", directives["creative"])),
+                        "media_buyer": str(dirs.get("media_buyer", directives["media_buyer"])),
+                    }
         except Exception:
             pass  # Fall back gracefully to synthesized deterministic directives
 
@@ -309,18 +373,43 @@ def build_governor_graph(
             # Consolidate unified proposal for HITL
             deck = state.get("creative_deck", {})
             shifts = shifts_data.get("shifts", [])
+
+            # Dynamic check evaluations
+            policy_checks = shifts_data.get("policy_checks", [])
+            cap_check = next((c for c in policy_checks if "Cap" in c.get("label", "")), {})
+            cap_status = cap_check.get("status", "pass")
+
+            cons_check = next((c for c in policy_checks if "Conservation" in c.get("label", "")), {})
+            cons_status = cons_check.get("status", "pass")
+
+            blocked_count = deck.get("blocked_count", 0)
+            flagged_count = deck.get("flagged_count", 0)
+            if blocked_count > 0:
+                sebi_status = "block"
+            elif flagged_count > 0:
+                sebi_status = "flagged"
+            else:
+                sebi_status = "pass"
+
+            analyst_findings = state.get("analyst_findings", {})
+            grounded = analyst_findings.get("grounded", True)
+            citations = analyst_findings.get("citations", [])
+            citation_status = "pass" if (grounded and len(citations) > 0) else "flagged"
+
+            corrections_count = flagged_count + (1 if cap_status != "pass" else 0) + (1 if cons_status != "pass" else 0)
+
             hitl_payload = HitlProposalPayload(
                 summary=f"Governor-orchestrated growth push for '{objective}'. Includes {len(deck.get('variants', []))} SEBI-checked variants and {len(shifts)} budget shifts within ±25% caps.",
                 action="approve_growth_relay_execution",
                 step_count=len(state.get("hops", [])),
-                validation_corrections=0,
+                validation_corrections=corrections_count,
                 checks=[
-                    {"label": "±25% Budget Cap", "status": "pass"},
-                    {"label": "Budget Conservation", "status": "pass"},
-                    {"label": "SEBI Compliance Rulebook", "status": "pass"},
-                    {"label": "Grounded Citation Guard", "status": "pass"},
+                    {"label": "±25% Budget Cap", "status": cap_status},
+                    {"label": "Budget Conservation", "status": cons_status},
+                    {"label": "SEBI Compliance Rulebook", "status": sebi_status},
+                    {"label": "Grounded Citation Guard", "status": citation_status},
                 ],
-                full_relay_summary="Analyst audit → Governor brief → Creative deck (SEBI passed) → Media Buyer budget rebalance (±25% cap verified).",
+                full_relay_summary="Analyst audit → Governor brief → Creative deck (SEBI checked) → Media Buyer budget rebalance (±25% cap verified).",
             )
 
             env_hitl = create_envelope(
@@ -344,6 +433,7 @@ def build_governor_graph(
                 "shifts": shifts,
                 "variants": deck.get("variants", []),
                 "step_count": len(state.get("hops", [])),
+                "validation_corrections": hitl_payload.validation_corrections,
                 "checks": hitl_payload.checks,
                 "interrupt_id": f"run:{run_id}:hitl",
             }
@@ -367,32 +457,63 @@ def build_governor_graph(
                 f"Analyze recent campaign trends, bottlenecks, audience cohorts and CAC dispersion for: {objective}",
                 idempotency_key=f"run:{run_id}:analyst",
             )
-            findings = AnalystFindingsPayload(
-                summary=result.answer or "Audit confirms Meta Retargeting as top converter (₹341 CAC, 3.4x ROAS) vs fatigued Search Competitor (₹550 CAC). Reallocate spend into social retargeting with fee-only transparency copy.",
-                trends=[
+            answer_text = result.answer or ""
+
+            # Dynamically extract trends, angles, and decay signals from answer
+            trends: list[dict[str, Any]] = []
+            top_angles: list[str] = []
+            decay_signals: list[str] = []
+
+            for line in answer_text.splitlines():
+                clean = line.lstrip("•-*0123456789.) ").strip()
+                if not clean:
+                    continue
+                lower = clean.lower()
+                if any(kw in lower for kw in ["fatigue", "decay", "drop", "elevated cac", "underperform", "blindness", "blind"]):
+                    decay_signals.append(clean)
+                elif any(kw in lower for kw in ["angle", "hook", "review", "audit", "transparent", "fhc", "offer", "portfolio", "roadmap"]):
+                    if len(clean) > 15:
+                        top_angles.append(clean)
+                elif any(kw in lower for kw in ["cac", "roas", "volume", "cohort", "trend", "cvr", "ctr", "cpc", "conversion"]):
+                    parts = clean.split(":", 1)
+                    if len(parts) == 2:
+                        trends.append({"metric": parts[0].strip(), "value": parts[1].strip(), "direction": "observed"})
+                    else:
+                        trends.append({"metric": clean[:30], "value": clean, "direction": "active"})
+
+            if not trends:
+                trends = [
                     {"metric": "Blended CAC", "value": "₹385", "direction": "improving (-12%)"},
                     {"metric": "Top Channel ROAS", "value": "3.4x", "direction": "peaking at 4.2x"},
                     {"metric": "FHC Checkup Volume", "value": "346 units", "direction": "accelerating"},
                     {"metric": "Top Audience Cohort", "value": "Tech Pros (28-38)", "direction": "38% lower CAC"},
-                ],
-                top_angles=[
-                    "Unbiased fee-only portfolio review for ₹999 (zero commissions)",
+                ]
+            if not top_angles:
+                top_angles = [
+                    f"Unbiased fee-only portfolio review for {objective[:40].strip() or '₹999 Checkup'}",
                     "Complete 360° asset allocation audit by certified SEBI planners",
                     "Family wealth preservation and tax roadmap",
-                ],
-                decay_signals=[
-                    "Search Competitor ad fatigue (+18% CAC over 14 days)",
-                    "Generic investment advice seeing audience blindness",
-                ],
-                citations=[dict(c) for c in result.citations] if result.citations else [
-                    {"label": "Audience Segments · 30d", "source": "docs/finnovate-campaign-intelligence.md"},
-                    {"label": "Meta Retargeting CAC ₹341", "source": "docs/finnovate-campaign-intelligence.md"},
-                ],
-                grounded=True,
+                ]
+            if not decay_signals:
+                decay_signals = [
+                    "Non-brand competitor search ad fatigue (+18% CAC over 14 days)",
+                ]
+
+            citations = [dict(c) for c in result.citations] if result.citations else [
+                {"label": "Audience Segments · 30d", "source": "docs/finnovate-campaign-intelligence.md"},
+                {"label": "Meta Retargeting CAC ₹341", "source": "docs/finnovate-campaign-intelligence.md"},
+            ]
+
+            findings = AnalystFindingsPayload(
+                summary=answer_text or f"30D performance audit for '{objective[:60]}': Meta Retargeting leads with strong ROAS. Reallocate spend into high-intent social channels.",
+                trends=trends[:4],
+                top_angles=top_angles[:3],
+                decay_signals=decay_signals[:2],
+                citations=citations,
+                grounded=result.grounded if hasattr(result, "grounded") else True,
             )
         except Exception as e:
             logger.warning("analyst.gateway_failed", error=str(e))
-            dir_analyst = state.get("plan", {}).get("directives", {}).get("analyst", "")
             findings = AnalystFindingsPayload(
                 summary=f"30D performance audit for '{objective[:60]}': Meta Retargeting leads at ₹341 CAC (3.4x ROAS) while Competitor Search shows fatigue at ₹550 CAC. Action: reallocate spend into high-intent social channels.",
                 trends=[
@@ -449,12 +570,19 @@ def build_governor_graph(
             text = await gateway.complete(
                 "creative.variants",
                 [{"role": "user", "content": framed_input}],
-                system="You are HELM's Creative. Generate exactly 3 transparent ad copy variants complying strictly with SEBI advertising guidelines.",
+                system="You are HELM's Creative. Generate exactly 3 transparent ad copy variants complying strictly with SEBI advertising guidelines. Return a JSON object with 'variants' containing headline and body.",
+                json_schema=VARIANTS_SCHEMA,
                 idempotency_key=f"run:{run_id}:creative",
             )
             parsed = json.loads(text)
-            if isinstance(parsed, dict) and "variants" in parsed and isinstance(parsed["variants"], list):
-                variants_raw = parsed["variants"]
+            if isinstance(parsed, dict) and "variants" in parsed and isinstance(parsed["variants"], list) and len(parsed["variants"]) > 0:
+                parsed_variants = [
+                    {"headline": str(v.get("headline", "")), "body": str(v.get("body", ""))}
+                    for v in parsed["variants"]
+                    if isinstance(v, dict) and v.get("headline") and v.get("body")
+                ]
+                if parsed_variants:
+                    variants_raw = parsed_variants
         except Exception:
             pass
 
@@ -500,17 +628,32 @@ def build_governor_graph(
             {"campaign_id": "fhc-meta-retargeting", "proposed_budget": 50000, "reason": "High conversion velocity on ₹999 checkups"},
             {"campaign_id": "search-competitor", "proposed_budget": 20000, "reason": "Shift underperforming budget to Meta retargeting"},
         ]
+        analysis_text = "Reallocated spend from fatigued search into high-ROAS Meta retargeting within ±25% policy caps."
 
         try:
             text = await gateway.complete(
                 "media_buyer.proposal",
                 [{"role": "user", "content": framed_pkg}],
-                system="You are HELM's Media Buyer. Reallocate daily ad spend within strict ±25% caps and budget conservation.",
+                system="You are HELM's Media Buyer. Reallocate daily ad spend within strict ±25% caps and budget conservation. Return a JSON object with 'shifts' array and 'analysis' string.",
+                json_schema=SHIFTS_SCHEMA,
                 idempotency_key=f"run:{run_id}:media_buyer",
             )
             parsed = json.loads(text)
-            if isinstance(parsed, dict) and "shifts" in parsed and isinstance(parsed["shifts"], list):
-                raw_shifts = parsed["shifts"]
+            if isinstance(parsed, dict):
+                if "analysis" in parsed and parsed["analysis"]:
+                    analysis_text = str(parsed["analysis"])
+                if "shifts" in parsed and isinstance(parsed["shifts"], list) and len(parsed["shifts"]) > 0:
+                    parsed_shifts = [
+                        {
+                            "campaign_id": str(s.get("campaign_id", "")),
+                            "proposed_budget": float(s.get("proposed_budget", 0)),
+                            "reason": str(s.get("reason", "")),
+                        }
+                        for s in parsed["shifts"]
+                        if isinstance(s, dict) and s.get("campaign_id")
+                    ]
+                    if parsed_shifts:
+                        raw_shifts = parsed_shifts
         except Exception:
             pass
 
@@ -529,16 +672,23 @@ def build_governor_graph(
 
         total_moved = sum(abs(float(s["proposed_budget"]) - float(s["current_budget"])) for s in shifts)
 
+        # Dynamic verification of policy checks
+        cap_status = "clamped" if (getattr(policy_res, "clamped", False) or getattr(policy_res, "adjustments", 0) > 0) else "pass"
+        
+        current_sum = sum(float(s.get("current_budget", 0)) for s in shifts)
+        proposed_sum = sum(float(s.get("proposed_budget", 0)) for s in shifts)
+        conservation_status = "pass" if abs(current_sum - proposed_sum) < 0.01 else "flagged"
+
         checks = [
-            {"label": "±25% Budget Shift Cap", "status": "pass"},
-            {"label": "Budget Conservation", "status": "pass"},
+            {"label": "±25% Budget Shift Cap", "status": cap_status},
+            {"label": "Budget Conservation", "status": conservation_status},
         ]
 
         proposal = BudgetProposalPayload(
             shifts=shifts,
             total_reallocated_daily=total_moved,
             policy_checks=checks,
-            analysis="Reallocated spend from fatigued search into high-ROAS Meta retargeting within ±25% policy caps.",
+            analysis=analysis_text,
         )
 
         return {

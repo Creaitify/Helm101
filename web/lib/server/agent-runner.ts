@@ -641,7 +641,7 @@ export async function startAgentRun(
       return { ok: false, error: `Unknown agent task: ${agent}` }
     }
 
-    const output = await runWorkerCommand(args, 15000)
+    const output = await runWorkerCommand(args, 60000)
     const parsed = parseStructuredOutput(output)
     if (parsed) {
       const res: AgentRunResult = {
@@ -682,16 +682,37 @@ export async function decideAgentRun(
       args.push('--reason', reason)
     }
 
-    const output = await runWorkerCommand(args, 15000)
+    const output = await runWorkerCommand(args, 30000)
     const parsed = parseStructuredOutput(output)
     if (parsed) {
+      const existingState = parsed.state || {}
+      const executionLog: string[] = Array.isArray(existingState.execution_log)
+        ? [...existingState.execution_log]
+        : []
+
+      if (decision === 'approved') {
+        try {
+          const router = new AdPlatformRouter()
+          const shifts = existingState.shifts || existingState.budget_proposal?.shifts || []
+          if (Array.isArray(shifts) && shifts.length > 0) {
+            const results = await router.executeApprovedShifts(shifts)
+            for (const res of results) {
+              executionLog.push(`  [Gateway Dispatch] ${res.platform.toUpperCase()}: ${res.action}`)
+            }
+          }
+        } catch {}
+      }
+
       const res: AgentRunResult = {
         ok: true,
         runId: parsed.run_id,
         status: parsed.status,
         isAwaitingApproval: parsed.is_awaiting_approval,
         interruptPayload: parsed.interrupt_payload,
-        state: parsed.state,
+        state: {
+          ...existingState,
+          execution_log: executionLog,
+        },
       }
 
       const existing = readLiveApprovalsFile()

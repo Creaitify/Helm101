@@ -75,10 +75,21 @@ def build_creative_graph(gateway: GatewayClient) -> StateGraph[CreativeState, No
                 idempotency_key=f"run:{run_id}:generate",
             )
             variants = _parse(text)
+            if not variants:
+                return {
+                    "variants": [],
+                    "status": "failed",
+                    "error_code": "no_variants",
+                }
+        except GatewayCallFailed as error:
+            logger.warning("creative.gateway_failed", run_id=run_id, error=str(error))
+            return {
+                "variants": [],
+                "status": "failed",
+                "error_code": error.code,
+            }
         except Exception as error:
             logger.warning("creative.generate_fallback", run_id=run_id, error=str(error))
-
-        if not variants:
             brief = state.get("brief", "Financial Health Checkup")
             short_brief = brief[:50].strip()
             variants = [

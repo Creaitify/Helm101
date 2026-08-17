@@ -21,8 +21,8 @@ export interface GoogleBudgetUpdate {
 export interface GoogleRsaInput {
   customerId: string
   adGroupId: string
-  headlines: string[]  // up to 15, max 30 chars each
-  descriptions: string[]  // up to 4, max 90 chars each
+  headlines: string[]  // min 3, up to 15, max 30 chars each (Google RSA requirement)
+  descriptions: string[]  // min 2, up to 4, max 90 chars each (Google RSA requirement)
   finalUrl: string
 }
 

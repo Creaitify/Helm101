@@ -12,7 +12,7 @@
 
 export interface MetaBudgetUpdate {
   campaignId: string
-  newDailyBudget: number  // in micros (₹40,000 = 40000_00)
+  newDailyBudget: number  // in currency minor units (paise for INR: ₹40,000 = 4000000; cents for USD)
   currency: string
 }
 
@@ -49,7 +49,8 @@ export class MetaAdsGateway {
 
   /**
    * Update daily budget for a Meta campaign.
-   * Maps to: POST /{campaign-id} { daily_budget: amount_in_micros }
+   * Maps to: POST /{campaign-id} { daily_budget: amount_in_minor_units }
+   * Note: Meta expects minor currency units (paise for INR, cents for USD), NOT micros.
    */
   async applyBudgetShift(update: MetaBudgetUpdate): Promise<{ ok: boolean; campaignId: string }> {
     // TODO: Implement Meta Marketing API call

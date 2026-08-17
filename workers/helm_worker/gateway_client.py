@@ -64,21 +64,27 @@ class GatewayClient:
         self,
         base_url: str,
         *,
+        auth_token: str | None = None,
         timeout_seconds: float = 10.0,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
+        self._auth_token = auth_token
         self._owns_client = client is None
         self._client = client or httpx.AsyncClient(
             timeout=httpx.Timeout(connect=2.0, read=timeout_seconds, write=5.0, pool=5.0)
         )
 
-    async def ask(self, question: str, *, idempotency_key: str | None = None) -> GroundedAnswer:
+    def _headers(self, *, idempotency_key: str | None = None) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
+        if self._auth_token:
+            headers["Authorization"] = f"Bearer {self._auth_token}"
         if idempotency_key:
-            # The reservation is keyed on this, so a retried request reuses its
-            # hold rather than charging the tenant twice.
             headers["Idempotency-Key"] = idempotency_key
+        return headers
+
+    async def ask(self, question: str, *, idempotency_key: str | None = None) -> GroundedAnswer:
+        headers = self._headers(idempotency_key=idempotency_key)
 
         try:
             response = await self._client.post(
@@ -127,9 +133,7 @@ class GatewayClient:
         because the caller declared the schema.
         """
 
-        headers = {"Content-Type": "application/json"}
-        if idempotency_key:
-            headers["Idempotency-Key"] = idempotency_key
+        headers = self._headers(idempotency_key=idempotency_key)
 
         body: dict[str, object] = {"task": task, "messages": messages, "max_tokens": max_tokens}
         if system:

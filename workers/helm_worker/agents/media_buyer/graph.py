@@ -95,6 +95,14 @@ def build_media_buyer_graph(
                 idempotency_key=f"run:{run_id}:analyze",
             )
             analysis, shifts = _parse(text)
+        except GatewayCallFailed as error:
+            logger.warning("media_buyer.gateway_failed", run_id=run_id, error=str(error))
+            return {
+                "analysis": "",
+                "raw_shifts": [],
+                "status": "failed",
+                "error_code": error.code,
+            }
         except Exception as error:
             logger.warning("media_buyer.analyze_fallback", run_id=run_id, error=str(error))
 

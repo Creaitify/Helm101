@@ -22,9 +22,11 @@ from helm_worker.runtime import AgentRuntime
 
 
 class FakeGateway:
-    def __init__(self, *, blocked_creative: bool = False, fails: bool = False) -> None:
+    def __init__(self, *, blocked_creative: bool = False, flagged_creative: bool = False, fails: bool = False) -> None:
         self.calls = 0
+        self.schemas: dict[str, Any] = {}
         self._blocked_creative = blocked_creative
+        self._flagged_creative = flagged_creative
         self._fails = fails
 
     async def ask(self, question: str, *, idempotency_key: str | None = None) -> Any:
@@ -33,8 +35,8 @@ class FakeGateway:
             raise GatewayCallFailed("down", code="provider_unavailable")
 
         class FakeAnswer:
-            answer = "Recent 30D analysis shows 4.2x ROAS on Retargeting and elevated CAC on non-brand search."
-            citations = []
+            answer = "Recent 30D analysis shows 4.2x ROAS on Retargeting and elevated CAC on non-brand search.\n• Blended CAC: ₹341\n• Fatigue signal: Search competitor fatigue\n• Angle recommendation: Transparent fee-only portfolio planning"
+            citations = [{"label": "Audience Segments", "source": "docs/finnovate.md"}]
             grounded = True
             corpus_digest = "sha256:test"
             citations_rejected = 0
@@ -52,8 +54,22 @@ class FakeGateway:
         idempotency_key: str | None = None,
     ) -> str:
         self.calls += 1
+        if json_schema is not None:
+            self.schemas[task] = json_schema
         if self._fails:
             raise GatewayCallFailed("down", code="provider_unavailable")
+
+        if task == "governor.plan":
+            return json.dumps(
+                {
+                    "plan_summary": "Orchestrated growth strategy for ₹999 checkup",
+                    "directives": {
+                        "analyst": "Audit 30D CAC and audience dispersion",
+                        "creative": "Draft SEBI-compliant copy variants",
+                        "media_buyer": "Rebalance budgets under ±25% caps",
+                    },
+                }
+            )
 
         if task == "creative.variants":
             if self._blocked_creative:
@@ -62,6 +78,15 @@ class FakeGateway:
                         "variants": [
                             {"headline": "Guaranteed 100% Returns", "body": "Risk-free assured profit on investments."},
                             {"headline": "Zero Risk Double Profit", "body": "Guaranteed growth with 100% certainty."},
+                        ]
+                    }
+                )
+            if self._flagged_creative:
+                return json.dumps(
+                    {
+                        "variants": [
+                            {"headline": "Safe Investment Planning", "body": "Get best returns with our portfolio review for ₹999."},
+                            {"headline": "Complete Financial Health Checkup", "body": "Get a comprehensive portfolio review and unbiased roadmap today for ₹999."},
                         ]
                     }
                 )
@@ -245,4 +270,60 @@ async def test_governor_halts_when_sebi_retries_exhausted(checkpoint_path: Path)
     assert handle.status == "failed"
     assert handle.state.get("error_code") == "sebi_compliance_exhausted"
     assert not handle.is_awaiting_approval
+
+
+async def test_governor_supplies_json_schemas_for_all_specialist_completions(checkpoint_path: Path) -> None:
+    gateway = FakeGateway()
+
+    async with open_checkpointer(checkpoint_path) as saver:
+        runtime = AgentRuntime(
+            graph=build_governor_graph(gateway), checkpointer=saver, prefix="gv"
+        )
+        handle = await runtime.start_with(
+            {"objective": "Scale ₹999 checkups with fee-only transparency", "tenant_id": "letstute"},
+            run_id="gv-schemas-test",
+        )
+
+    assert handle.is_awaiting_approval
+    # Verify JSON schemas were supplied to gateway.complete calls
+    assert "governor.plan" in gateway.schemas
+    assert "creative.variants" in gateway.schemas
+    assert "media_buyer.proposal" in gateway.schemas
+
+    # Verify schema structures
+    assert gateway.schemas["governor.plan"]["required"] == ["plan_summary", "directives"]
+    assert gateway.schemas["creative.variants"]["required"] == ["variants"]
+    assert gateway.schemas["media_buyer.proposal"]["required"] == ["shifts"]
+
+    # Verify dynamic Analyst findings extraction
+    analyst_findings = handle.state.get("analyst_findings", {})
+    assert len(analyst_findings.get("trends", [])) > 0
+    assert len(analyst_findings.get("top_angles", [])) > 0
+    assert len(analyst_findings.get("decay_signals", [])) > 0
+
+
+async def test_governor_reflects_actual_hitl_check_statuses_when_flagged(checkpoint_path: Path) -> None:
+    gateway = FakeGateway(flagged_creative=True)
+
+    async with open_checkpointer(checkpoint_path) as saver:
+        runtime = AgentRuntime(
+            graph=build_governor_graph(gateway), checkpointer=saver, prefix="gv"
+        )
+        handle = await runtime.start_with(
+            {"objective": "Scale checkups", "tenant_id": "letstute"},
+            run_id="gv-flagged-check-test",
+        )
+
+    assert handle.is_awaiting_approval
+    proposal = handle.interrupt_payload
+    assert proposal is not None
+    checks = {c["label"]: c["status"] for c in proposal.get("checks", [])}
+    
+    # SEBI check should evaluate to "flagged" due to superlative phrase in variant
+    assert checks.get("SEBI Compliance Rulebook") == "flagged"
+    assert checks.get("±25% Budget Cap") == "pass"
+    assert checks.get("Budget Conservation") == "pass"
+    assert checks.get("Grounded Citation Guard") == "pass"
+    assert proposal.get("validation_corrections", 0) > 0
+
 

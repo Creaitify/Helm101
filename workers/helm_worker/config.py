@@ -39,6 +39,7 @@ class WorkerSettings(BaseSettings):
     # The only address the worker knows. Every model call and every durable
     # write goes here.
     helm_api_base_url: str = "http://localhost:8000"
+    helm_api_auth_token: str | None = None
     request_timeout_seconds: float = 10.0
 
     # Where LangGraph checkpoints live. A file, not memory: the runtime has to
@@ -46,6 +47,16 @@ class WorkerSettings(BaseSettings):
     state_dir: Path = Field(default=Path(".helm-worker"))
 
     worker_id: str = "worker-1"
+
+    @property
+    def auth_token(self) -> str | None:
+        if self.helm_api_auth_token:
+            return self.helm_api_auth_token
+        return (
+            os.environ.get("HELM_API_AUTH_TOKEN")
+            or os.environ.get("HELM_AUTH_TOKEN")
+            or os.environ.get("HELM_WORKER_BEARER_TOKEN")
+        )
 
     @property
     def checkpoint_path(self) -> Path:

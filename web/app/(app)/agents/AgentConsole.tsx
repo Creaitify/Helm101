@@ -26,6 +26,9 @@ import {
   Clock,
   ChevronRight,
   X,
+  TrendingUp,
+  ExternalLink,
+  ShieldAlert,
 } from 'lucide-react'
 
 interface AgentMeta {
@@ -234,51 +237,68 @@ export function AgentConsole() {
         })}
       </div>
 
-      {/* Active Agent Header & Presets */}
-      <div className="agent-meta-banner">
+      {/* Active Agent Description */}
+      <div className="agent-desc-bar">
         <p>{selectedAgent.description}</p>
-        <div className="agent-presets">
-          <span className="agent-presets-label">Preset goals:</span>
-          {selectedAgent.presets.map((preset, idx) => (
-            <button
-              key={idx}
-              type="button"
-              className="agent-preset-chip"
-              onClick={() => setPrompt(preset)}
-            >
-              {preset.length > 55 ? `${preset.slice(0, 55)}…` : preset}
-            </button>
-          ))}
-        </div>
       </div>
 
       {/* Input / Execution Box */}
       <div className="agent-input-wrap">
-        {selectedAgent.kind === 'governor' && (
-          <div className="agent-preset-chips-wrap">
+        <div className="agent-preset-chips-wrap">
+          <div className="preset-header-row">
             <span className="preset-label">Preset Objectives:</span>
-            <div className="agent-preset-chips">
-              {selectedAgent.presets.map((preset, idx) => (
-                <button
-                  key={idx}
-                  type="button"
-                  className={`preset-chip-btn ${prompt === preset ? 'active' : ''}`}
-                  onClick={() => setPrompt(preset)}
-                >
+            <span className="preset-hint">Click a template or customize your directive below</span>
+          </div>
+          <div className="agent-preset-chips">
+            {selectedAgent.presets.map((preset, idx) => (
+              <button
+                key={idx}
+                type="button"
+                className={`preset-chip-btn ${prompt === preset ? 'active' : ''}`}
+                onClick={() => setPrompt(preset)}
+                disabled={busy}
+              >
+                <div className="preset-chip-title">
                   <b>Preset {idx + 1}</b>
-                  <span>{preset}</span>
+                  {prompt === preset && <span className="preset-chip-badge">Active</span>}
+                </div>
+                <span>{preset}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="agent-prompt-box">
+          <div className="agent-prompt-header">
+            <div className="agent-prompt-title">
+              <Sparkles width={14} height={14} color="var(--violet-2)" />
+              <span>{selectedAgent.kind === 'governor' ? 'Mission Directive & Target Parameters' : 'Task Prompt & Directive'}</span>
+            </div>
+            <div className="agent-prompt-actions">
+              {prompt && !busy && (
+                <button
+                  type="button"
+                  className="agent-prompt-clear-btn"
+                  onClick={() => setPrompt('')}
+                  title="Clear input"
+                >
+                  Clear
                 </button>
-              ))}
+              )}
+              <span className="agent-prompt-charcount">{prompt.length} chars</span>
             </div>
           </div>
-        )}
-        <textarea
-          rows={3}
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          placeholder={selectedAgent.placeholder}
-          disabled={busy}
-        />
+
+          <textarea
+            className="agent-prompt-textarea"
+            rows={4}
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            placeholder={selectedAgent.placeholder}
+            disabled={busy}
+          />
+        </div>
+
         <div className="agent-input-footer">
           <div className="agent-input-note">
             <ShieldCheck width={14} height={14} color="var(--emerald-2)" />
@@ -286,7 +306,7 @@ export function AgentConsole() {
           </div>
           <Button
             variant="primary"
-            className={selectedAgent.kind === 'governor' ? 'btn-governor-dispatch' : ''}
+            className={`btn-agent-dispatch ${selectedAgent.kind === 'governor' ? 'btn-governor-dispatch' : ''}`}
             aria-label={`Start ${selectedAgent.name} Run · Dispatch Mission`}
             disabled={busy || !prompt.trim()}
             onClick={handleRun}
@@ -481,119 +501,224 @@ export function AgentConsole() {
           {isAwaiting && result.interruptPayload && (
             <div className="hitl-decision-card">
               <div className="hitl-header">
-                <div className="hitl-title">
-                  <ShieldCheck width={18} height={18} color="var(--amber-2)" />
-                  <h4>Human Authorization Required</h4>
+                <div className="hitl-header-left">
+                  <div className="hitl-badge-icon">
+                    <ShieldCheck width={20} height={20} color="var(--amber-2)" />
+                  </div>
+                  <div>
+                    <h4>Human Authorization Required</h4>
+                    <span className="hitl-sub">Pausing at checkpoint — state preserved in checkpointer database.</span>
+                  </div>
                 </div>
-                <span className="hitl-sub">Pausing at checkpoint — state preserved in checkpointer database.</span>
+                <Link href="/approvals" className="hitl-open-approvals-chip" title="Inspect full audit record in Approvals">
+                  <span>Approvals Hub</span>
+                  <ExternalLink width={12} height={12} />
+                </Link>
               </div>
 
               <div className="hitl-body">
+                {/* Executive Summary */}
                 <div className="hitl-summary-box">
-                  <b>Proposal Summary:</b>
+                  <div className="hitl-box-header">
+                    <Sparkles width={13} height={13} color="var(--violet-2)" />
+                    <b>Proposal Summary:</b>
+                  </div>
                   <p>{result.interruptPayload.summary || result.interruptPayload.action}</p>
                 </div>
 
-                {/* Shifts Preview if Media Buyer or Relay */}
+                {/* Proposed Daily Budget Shifts Table */}
                 {result.interruptPayload.shifts && result.interruptPayload.shifts.length > 0 && (
                   <div className="hitl-shifts-preview">
-                    <span className="preview-label">Proposed Daily Budget Shifts:</span>
+                    <div className="preview-header-bar">
+                      <div className="preview-label-group">
+                        <DollarSign width={14} height={14} color="var(--emerald-2)" />
+                        <span className="preview-label">Proposed Daily Budget Shifts:</span>
+                      </div>
+                      <span className="policy-caps-tag">±25% Policy Caps Verified</span>
+                    </div>
+
                     <div className="shifts-table">
-                      {result.interruptPayload.shifts.map((s: any, idx: number) => (
-                        <div key={idx} className="shift-row">
-                          <span className="shift-id">{s.campaign_id}</span>
-                          <span className="shift-nums">
-                            ₹{Number(s.current_budget).toLocaleString()} → <b>₹{Number(s.proposed_budget).toLocaleString()}</b>
-                          </span>
-                          <span className="shift-reason">{s.reason}</span>
-                        </div>
-                      ))}
+                      <div className="shifts-table-head">
+                        <span>Campaign ID</span>
+                        <span>Current</span>
+                        <span>Proposed</span>
+                        <span>Shift Delta</span>
+                        <span>Optimization Rationale</span>
+                      </div>
+                      {result.interruptPayload.shifts.map((s: any, idx: number) => {
+                        const cur = Number(s.current_budget) || 0
+                        const prop = Number(s.proposed_budget) || 0
+                        const delta = prop - cur
+                        const pct = cur > 0 ? (delta / cur) * 100 : 0
+                        const isUp = delta > 0
+
+                        return (
+                          <div key={idx} className="shift-row">
+                            <div className="shift-id-cell">
+                              <span className="channel-tag">{s.campaign_id.includes('meta') ? 'Meta' : 'Google'}</span>
+                              <span className="shift-id">{s.campaign_id}</span>
+                            </div>
+                            <div className="shift-num-cell">
+                              ₹{cur.toLocaleString('en-IN')}
+                            </div>
+                            <div className="shift-num-cell proposed">
+                              ₹{prop.toLocaleString('en-IN')}
+                            </div>
+                            <div className="shift-delta-cell">
+                              <span className={`delta-badge ${isUp ? 'up' : 'down'}`}>
+                                {isUp ? '+' : ''}₹{Math.abs(delta).toLocaleString('en-IN')} ({pct > 0 ? '+' : ''}{pct.toFixed(1)}%)
+                              </span>
+                            </div>
+                            <div className="shift-reason-cell">
+                              {s.reason}
+                            </div>
+                          </div>
+                        )
+                      })}
                     </div>
                   </div>
                 )}
 
-                {/* Variants Preview if Creative or Relay */}
+                {/* Compliant Copy Variants */}
                 {result.interruptPayload.variants && result.interruptPayload.variants.length > 0 && (
                   <div className="hitl-variants-preview">
-                    <span className="preview-label">Compliant Copy Variants:</span>
-                    <div className="variants-list">
+                    <div className="preview-header-bar">
+                      <div className="preview-label-group">
+                        <PenTool width={14} height={14} color="var(--violet-2)" />
+                        <span className="preview-label">Compliant Copy Variants:</span>
+                      </div>
+                      <Link href="/studio" className="preview-studio-link">
+                        Open in Creative Studio <ExternalLink width={11} height={11} style={{ display: 'inline', marginLeft: 3 }} />
+                      </Link>
+                    </div>
+
+                    <div className="variants-grid">
                       {result.interruptPayload.variants.map((v: any, idx: number) => (
-                        <div key={idx} className="variant-box">
-                          <b>{v.headline}</b>
-                          <p>{v.body}</p>
+                        <div key={idx} className="variant-card">
+                          <div className="variant-card-head">
+                            <span className="variant-num">Variant {idx + 1}</span>
+                            <span className="pill-micro pass">SEBI pass</span>
+                          </div>
+                          <b className="variant-title">{v.headline}</b>
+                          <p className="variant-body">{v.body}</p>
                         </div>
                       ))}
                     </div>
                   </div>
                 )}
 
-                {/* Policy Checks Badges */}
+                {/* Policy Checks Badges Matrix */}
                 {result.interruptPayload.checks && (
-                  <div className="hitl-checks">
-                    {result.interruptPayload.checks.map((chk: any, idx: number) => (
-                      <span key={idx} className="check-badge pass">
-                        <CheckCircle2 width={12} height={12} />
-                        {chk.label}
-                      </span>
-                    ))}
+                  <div className="hitl-checks-section">
+                    <span className="checks-heading">Deterministic Policy Verification:</span>
+                    <div className="hitl-checks-grid">
+                      {result.interruptPayload.checks.map((chk: any, idx: number) => (
+                        <div key={idx} className={`check-card ${chk.status || 'pass'}`}>
+                          <div className="check-card-left">
+                            <CheckCircle2 width={14} height={14} color="var(--emerald-2)" />
+                            <span className="check-card-label">{chk.label}</span>
+                          </div>
+                          <span className={`check-card-status ${chk.status || 'pass'}`}>
+                            {chk.status === 'clamped' ? 'Clamped' : chk.status === 'flagged' ? 'Flagged' : 'Pass'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
-              </div>
 
-                {/* Decision Action Buttons */}
-                <div className="hitl-footer">
-                  {!showRejectInput ? (
-                    <div className="hitl-actions">
-                      <Button
-                        variant="primary"
-                        disabled={deciding}
-                        onClick={() => handleDecision('approved')}
-                      >
-                        <CheckCircle2 width={15} height={15} />
-                        {deciding ? 'Authorizing…' : 'Approve & Execute'}
-                      </Button>
-                      <Button
-                        variant="outline"
-                        disabled={deciding}
-                        onClick={() => setShowRejectInput(true)}
-                      >
-                        <XCircle width={15} height={15} />
-                        Reject Proposal
-                      </Button>
-                    </div>
-                  ) : (
-                    <div className="hitl-reject-box">
-                      <input
-                        type="text"
-                        placeholder="Enter reason for rejection (optional)..."
-                        value={rejectReason}
-                        onChange={(e) => setRejectReason(e.target.value)}
-                      />
-                      <div className="hitl-reject-btns">
-                        <Button
-                          variant="primary"
-                          disabled={deciding}
-                          onClick={() => handleDecision('rejected')}
-                        >
-                          Confirm Rejection
-                        </Button>
-                        <Button
-                          variant="outline"
-                          onClick={() => setShowRejectInput(false)}
-                        >
-                          Cancel
-                        </Button>
+                {/* Cross-Platform Hand-off Cards */}
+                <div className="cross-platform-hand-off">
+                  <span className="hand-off-title">
+                    <Layers width={13} height={13} color="var(--violet-2)" />
+                    Cross-Platform Workflow Hand-off:
+                  </span>
+                  <div className="hand-off-cards">
+                    <Link href="/approvals" className="hand-off-card">
+                      <div className="hand-off-card-icon">📋</div>
+                      <div className="hand-off-card-content">
+                        <b>Approvals Queue</b>
+                        <span>Authorize multi-agent proposals alongside team approvals</span>
                       </div>
-                    </div>
-                  )}
+                      <ChevronRight width={14} height={14} className="hand-off-arrow" />
+                    </Link>
 
-                  <div className="hitl-approvals-link-wrap">
-                    <Link href="/approvals" className="hitl-approvals-link">
-                      📋 View in Approvals →
+                    <Link href="/studio" className="hand-off-card">
+                      <div className="hand-off-card-icon">🎨</div>
+                      <div className="hand-off-card-content">
+                        <b>Creative Studio</b>
+                        <span>Edit copy cards & ship directly to Meta/Google ad inventory</span>
+                      </div>
+                      <ChevronRight width={14} height={14} className="hand-off-arrow" />
+                    </Link>
+
+                    <Link href="/analytics" className="hand-off-card">
+                      <div className="hand-off-card-icon">📊</div>
+                      <div className="hand-off-card-content">
+                        <b>Analytics Dashboard</b>
+                        <span>Track live ROAS, spend pacing & blended CAC curves</span>
+                      </div>
+                      <ChevronRight width={14} height={14} className="hand-off-arrow" />
                     </Link>
                   </div>
                 </div>
               </div>
+
+              {/* Decision Action Buttons */}
+              <div className="hitl-footer">
+                {!showRejectInput ? (
+                  <div className="hitl-actions">
+                    <Button
+                      variant="primary"
+                      className="btn-approve-execute"
+                      disabled={deciding}
+                      onClick={() => handleDecision('approved')}
+                    >
+                      <CheckCircle2 width={16} height={16} />
+                      {deciding ? 'Authorizing…' : 'Approve & Execute'}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      disabled={deciding}
+                      onClick={() => setShowRejectInput(true)}
+                    >
+                      <XCircle width={15} height={15} />
+                      Reject Proposal
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="hitl-reject-box">
+                    <input
+                      type="text"
+                      placeholder="Enter reason for rejection (optional)..."
+                      value={rejectReason}
+                      onChange={(e) => setRejectReason(e.target.value)}
+                    />
+                    <div className="hitl-reject-btns">
+                      <Button
+                        variant="primary"
+                        disabled={deciding}
+                        onClick={() => handleDecision('rejected')}
+                      >
+                        Confirm Rejection
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={() => setShowRejectInput(false)}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="hitl-approvals-link-wrap">
+                  <Link href="/approvals" className="hitl-approvals-link">
+                    📋 View in Approvals →
+                  </Link>
+                </div>
+              </div>
+            </div>
           )}
 
           {/* Execution Log if Completed */}

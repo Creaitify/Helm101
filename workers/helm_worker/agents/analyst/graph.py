@@ -53,6 +53,7 @@ def build_analyst_graph(gateway: GatewayClient) -> StateGraph[AnalystState, None
 
         question = state["question"]
         run_id = state["run_id"]
+        trends: list[dict[str, Any]] = []
 
         try:
             result = await gateway.ask(question, idempotency_key=f"run:{run_id}:analyze")
@@ -60,6 +61,17 @@ def build_analyst_graph(gateway: GatewayClient) -> StateGraph[AnalystState, None
             citations = [dict(citation) for citation in result.citations]
             grounded = result.grounded
             corpus_digest = result.corpus_digest
+        except GatewayCallFailed as error:
+            logger.warning("analyst.gateway_failed", run_id=run_id, error=str(error))
+            return {
+                "answer": "",
+                "citations": [],
+                "trends": [],
+                "grounded": False,
+                "corpus_digest": "",
+                "status": "failed",
+                "error_code": error.code,
+            }
         except Exception as error:
             logger.warning("analyst.analyze_fallback", run_id=run_id, error=str(error))
             fallback = _select_analyst_fallback(question)

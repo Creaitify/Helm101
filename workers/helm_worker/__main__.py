@@ -140,7 +140,11 @@ async def _run(args: argparse.Namespace) -> int:
     configure_logging(level=settings.log_level, json_logs=is_json)
     settings.assert_no_provider_credentials()
 
-    gateway = GatewayClient(settings.helm_api_base_url, timeout_seconds=settings.request_timeout_seconds)
+    gateway = GatewayClient(
+        settings.helm_api_base_url,
+        auth_token=settings.auth_token,
+        timeout_seconds=settings.request_timeout_seconds,
+    )
     try:
         async with open_checkpointer(settings.checkpoint_path) as checkpointer:
             analyst = AnalystRuntime(gateway=gateway, checkpointer=checkpointer)
@@ -168,6 +172,8 @@ async def _run(args: argparse.Namespace) -> int:
                     "cost_micros": envelope.get("estimated_cost_micros", 0),
                 }
                 headers = {"Content-Type": "application/json", "X-HELM-Active-Tenant": envelope.get("tenant_id", "letstute")}
+                if settings.auth_token:
+                    headers["Authorization"] = f"Bearer {settings.auth_token}"
                 try:
                     async with httpx.AsyncClient(timeout=httpx.Timeout(connect=0.5, read=1.0, write=1.0, pool=1.0)) as client:
                         await client.post(url, json=body, headers=headers)

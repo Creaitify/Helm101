@@ -1,9 +1,15 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { buildVariants } from '@/lib/studio'
 import { StudioView } from '@/app/(app)/studio/StudioView'
 import { briefDefaults } from '@/lib/data/mock/fixtures'
+
+vi.mock('@/app/(app)/studio/actions', () => ({
+  generateLiveVariants: vi.fn().mockResolvedValue([]),
+  getGovernorVariantsAction: vi.fn().mockResolvedValue([]),
+  shipVariantToCampaign: vi.fn().mockResolvedValue(true),
+}))
 
 describe('studio', () => {
   it('buildVariants returns 6 variants with at least one flagged', () => {
